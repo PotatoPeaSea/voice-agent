@@ -1,0 +1,25 @@
+# Named voice profiles. Switch with `active`, a /voice slash command, or by asking the bot.
+# `providerOptions` is passed straight to the provider for vendor-specific settings.
+active: default
+
+profiles:
+  default:
+    provider: cartesia
+    voiceId: "REPLACE_WITH_CARTESIA_VOICE_ID"
+    model: sonic-2
+    providerOptions:
+      emotion: ["positivity:low"]
+
+  narrator:
+    provider: elevenlabs
+    voiceId: "REPLACE_WITH_ELEVENLABS_VOICE_ID"   # designed or cloned voice IDs work here
+    model: eleven_flash_v2_5
+    providerOptions:
+      stability: 0.5
+      similarity_boost: 0.75
+      style: 0.2
+
+  local:
+    provider: kokoro          # self-hosted on the Linux workstation
+    voiceId: af_heart
+    speed: 1.05
