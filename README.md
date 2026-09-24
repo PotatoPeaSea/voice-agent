@@ -7,7 +7,7 @@ Full design: see the plan (architecture, latency budget, milestones). Backlog: [
 
 ## Status
 - [x] Project skeleton, pluggable STT/TTS interfaces, voice profiles (`config/voices.yaml`)
-- [ ] **Milestone 0: live voice receive/playback under DAVE E2EE** — `npm run spike`
+- [x] **Milestone 0: live voice receive/playback under DAVE E2EE** — `npm run spike` (verified 2026-09-24)
 - [ ] M1 voice loop · M2 Hermes adapter · M3 orchestrator tools · M4 questions/cancel · M5 hardening + Linux
 
 ## Setup
