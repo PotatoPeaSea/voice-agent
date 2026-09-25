@@ -3,8 +3,8 @@
  * STT (Deepgram Flux) -> LLM (OpenAI-compatible, with tools) -> TTS (voice profile) with barge-in.
  * The LLM can dispatch Claude Code agents (via ACP) that work in the background.
  */
-import { Client, Events, GatewayIntentBits } from "discord.js";
-import { VoiceConnectionStatus, entersState, joinVoiceChannel } from "@discordjs/voice";
+import { Client, Events, GatewayIntentBits, type Guild } from "discord.js";
+import { VoiceConnectionStatus, entersState, joinVoiceChannel, type VoiceConnection } from "@discordjs/voice";
 import { loadEnv } from "./config.js";
 import { ChatModel } from "./llm/chat.js";
 import { Speaker } from "./bot/speaker.js";
@@ -46,22 +46,55 @@ function isAllowed(userId: string): boolean {
   return env.ALLOWED_USER_IDS.length === 0 || env.ALLOWED_USER_IDS.includes(userId);
 }
 
+const JOIN_ATTEMPTS = 6;
+const JOIN_TIMEOUT_MS = 20_000;
+const JOIN_RETRY_MS = 10_000;
+let voiceConnection: VoiceConnection | undefined;
+
+/**
+ * Join the voice channel, retrying. After an unclean exit Discord keeps the old
+ * voice session for a while and new joins loop between signalling and connecting;
+ * tearing down and rejoining after a pause gets through once it expires.
+ */
+async function joinVoice(guild: Guild): Promise<VoiceConnection> {
+  for (let attempt = 1; attempt <= JOIN_ATTEMPTS; attempt++) {
+    const connection = joinVoiceChannel({
+      guildId: guild.id,
+      channelId: env.DISCORD_VOICE_CHANNEL_ID,
+      adapterCreator: guild.voiceAdapterCreator,
+      selfDeaf: false,
+      selfMute: false,
+      debug: env.VERBOSE,
+    });
+    voiceConnection = connection;
+    connection.on("stateChange", (from, to) => {
+      if (from.status !== to.status && env.VERBOSE) log(`voice: ${from.status} -> ${to.status}`);
+    });
+    if (env.VERBOSE) connection.on("debug", (msg) => log("[voice]", msg.slice(0, 300)));
+    connection.on("error", (err) => log("voice connection error:", err.message));
+    try {
+      await entersState(connection, VoiceConnectionStatus.Ready, JOIN_TIMEOUT_MS);
+      return connection;
+    } catch {
+      log(`voice join attempt ${attempt}/${JOIN_ATTEMPTS} stuck in "${connection.state.status}"; retrying in ${JOIN_RETRY_MS / 1000}s`);
+      connection.destroy();
+      await new Promise((r) => setTimeout(r, JOIN_RETRY_MS));
+    }
+  }
+  throw new Error("couldn't join the voice channel; check the channel ID and the bot's Connect/Speak permissions");
+}
+
 client.once(Events.ClientReady, async (c) => {
   log(`logged in as ${c.user.tag}`);
   const guild = await c.guilds.fetch(env.DISCORD_GUILD_ID);
-  const connection = joinVoiceChannel({
-    guildId: guild.id,
-    channelId: env.DISCORD_VOICE_CHANNEL_ID,
-    adapterCreator: guild.voiceAdapterCreator,
-    selfDeaf: false,
-    selfMute: false,
-    debug: env.VERBOSE,
-  });
-  connection.on("stateChange", (from, to) => {
-    if (from.status !== to.status) log(`voice: ${from.status} -> ${to.status}`);
-  });
-  if (env.VERBOSE) connection.on("debug", (msg) => log("[voice]", msg.slice(0, 300)));
-  connection.on("error", (err) => log("voice connection error:", err.message));
+  let connection: VoiceConnection;
+  try {
+    connection = await joinVoice(guild);
+  } catch (err) {
+    log((err as Error).message);
+    return shutdown();
+  }
+  log("joined voice channel");
   connection.on(VoiceConnectionStatus.Disconnected, async () => {
     try {
       await Promise.race([
@@ -73,13 +106,6 @@ client.once(Events.ClientReady, async (c) => {
       shutdown();
     }
   });
-
-  try {
-    await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
-  } catch {
-    log(`voice connection stuck in "${connection.state.status}" after 30s; check channel ID and Connect/Speak permissions`);
-    return shutdown();
-  }
   const speaker = new Speaker(connection, log);
 
   // Pay one-time setup costs before the first reply.
@@ -117,12 +143,18 @@ client.once(Events.ClientReady, async (c) => {
   log("ready — talk to me in the voice channel");
 });
 
-function shutdown(): void {
+let shuttingDown = false;
+/** Leave the voice channel cleanly so the next start doesn't hit a stale Discord voice session. */
+async function shutdown(): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
   for (const session of sessions.values()) session.close();
   worker.shutdown();
-  client.destroy();
+  voiceConnection?.destroy(); // sends the voice-state "leave" to Discord
+  await new Promise((r) => setTimeout(r, 500)); // let the leave go out before the gateway closes
+  await client.destroy();
   process.exit(0);
 }
-process.on("SIGINT", shutdown);
+for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"] as const) process.on(signal, () => void shutdown());
 
 client.login(env.DISCORD_TOKEN);
