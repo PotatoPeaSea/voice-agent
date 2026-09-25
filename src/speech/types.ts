@@ -2,8 +2,10 @@
  * Provider-agnostic speech interfaces. Every STT/TTS backend (cloud API or
  * local service) implements one of these, so the pipeline never depends on a vendor.
  *
- * Audio format contract at the boundary: 48kHz, stereo, signed 16-bit LE PCM
- * (Discord's native format). Providers resample internally.
+ * Audio formats at the boundary (signed 16-bit little-endian PCM):
+ *   - STT input:  16kHz mono
+ *   - TTS output: 48kHz stereo (Discord's native format)
+ * Providers convert internally (see src/audio/pcm.ts).
  */
 
 export interface VoiceProfile {
@@ -15,6 +17,8 @@ export interface VoiceProfile {
   language?: string;
   /** Vendor-specific knobs passed through untouched (stability, style, emotion, ...). */
   providerOptions?: Record<string, unknown>;
+  /** Name of another profile to use if this one fails. */
+  fallback?: string;
 }
 
 export interface VoiceInfo {
@@ -35,17 +39,19 @@ export interface TtsProvider {
   cloneVoice?(name: string, samples: Buffer[]): Promise<string>;
 }
 
-export interface Transcript {
-  text: string;
-  isFinal: boolean;
-  /** Provider-reported end of utterance (in addition to our own VAD). */
-  speechFinal?: boolean;
-}
+/**
+ * Turn-level transcription events. Providers without built-in turn detection
+ * must pair with a VAD to produce turn_start / turn_end.
+ */
+export type SttEvent =
+  | { type: "turn_start" }
+  | { type: "partial"; text: string }
+  | { type: "turn_end"; text: string };
 
 export interface SttProvider {
   readonly name: string;
-  /** Stream PCM in, get partial and final transcripts out while the user is talking. */
-  transcribe(audio: AsyncIterable<Buffer>, signal: AbortSignal): AsyncIterable<Transcript>;
+  /** Stream PCM in continuously (including silence), get turn events out while the user talks. */
+  transcribe(audio: AsyncIterable<Buffer>, signal: AbortSignal): AsyncIterable<SttEvent>;
 }
 
 export type TtsFactory = (options: Record<string, unknown>) => TtsProvider;

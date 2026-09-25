@@ -1,25 +1,37 @@
-# Named voice profiles. Switch with `active`, a /voice slash command, or by asking the bot.
+# Named voice profiles. Switch with `active` (later also a /voice slash command or by asking the bot).
+# List voice IDs:  npm run voices -- qwen-local | qwen-cloud | cartesia | elevenlabs
 # `providerOptions` is passed straight to the provider for vendor-specific settings.
-active: default
+# `fallback` names another profile used automatically if this one fails.
+active: qwen
 
 profiles:
-  default:
+  # Qwen3-TTS on the local GPU (services/qwen-tts). Preset English speakers: Aiden, Ryan.
+  qwen:
+    provider: qwen-local
+    voiceId: Aiden          # "Sunny American male voice with clear midrange"
+    language: English
+    fallback: qwen-cloud
+
+  # Qwen3-TTS on Alibaba Cloud (DashScope). Used when the local service is down.
+  qwen-cloud:
+    provider: qwen-cloud
+    voiceId: Ethan
+    model: qwen3-tts-flash-realtime
+    language: English
+
+  cartesia:
     provider: cartesia
     voiceId: "REPLACE_WITH_CARTESIA_VOICE_ID"
-    model: sonic-2
+    model: sonic-3.6
     providerOptions:
-      emotion: ["positivity:low"]
+      emotion: content        # neutral | calm | angry | content | sad
 
-  narrator:
+  eleven:
     provider: elevenlabs
-    voiceId: "REPLACE_WITH_ELEVENLABS_VOICE_ID"   # designed or cloned voice IDs work here
-    model: eleven_flash_v2_5
+    voiceId: "REPLACE_WITH_ELEVENLABS_VOICE_ID"   # premade, designed or cloned voice IDs all work
+    model: eleven_flash_v2_5                      # lowest-latency ElevenLabs model
     providerOptions:
       stability: 0.5
       similarity_boost: 0.75
-      style: 0.2
-
-  local:
-    provider: kokoro          # self-hosted on the Linux workstation
-    voiceId: af_heart
-    speed: 1.05
+      style: 0.0
+      use_speaker_boost: true

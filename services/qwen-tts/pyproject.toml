@@ -1,0 +1,27 @@
+[project]
+name = "qwen-tts-service"
+version = "0.1.0"
+description = "Local Qwen3-TTS HTTP service for the voice agent"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "qwen-tts==0.1.1",
+  "faster-qwen3-tts",
+  "torch>=2.7",
+  "torchaudio>=2.7",
+  "fastapi>=0.115",
+  "uvicorn>=0.32",
+  "numpy",
+  "hf_xet",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true

@@ -10,6 +10,8 @@ const ProfileSchema = z.object({
   speed: z.number().positive().optional(),
   language: z.string().optional(),
   providerOptions: z.record(z.string(), z.unknown()).optional(),
+  /** Profile to use if this one fails (e.g. local service down). */
+  fallback: z.string().optional(),
 });
 
 const VoicesFileSchema = z.object({
@@ -26,6 +28,11 @@ export function parseVoices(yamlText: string): VoiceConfig {
   const config = VoicesFileSchema.parse(parse(yamlText));
   if (!config.profiles[config.active]) {
     throw new Error(`Active voice "${config.active}" is not defined in profiles`);
+  }
+  for (const [name, profile] of Object.entries(config.profiles)) {
+    if (profile.fallback && !config.profiles[profile.fallback]) {
+      throw new Error(`Voice "${name}" falls back to unknown profile "${profile.fallback}"`);
+    }
   }
   return config;
 }

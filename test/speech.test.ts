@@ -30,6 +30,7 @@ profiles:
 
   it("parses the shipped config/voices.yaml", async () => {
     const { loadVoices } = await import("../src/speech/voices.js");
-    expect(loadVoices().active).toBe("default");
+    const cfg = loadVoices();
+    expect(cfg.profiles[cfg.active]).toBeDefined();
   });
 });

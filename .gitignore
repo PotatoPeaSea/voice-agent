@@ -4,3 +4,7 @@ recordings/
 data/
 *.log
 spike.log
+.venv/
+__pycache__/
+qwen-tts.log
+bot.log
