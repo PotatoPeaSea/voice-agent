@@ -13,7 +13,7 @@ export interface ToolContext {
 }
 
 const settingProps = {
-  model: { type: "string", description: "Model alias, e.g. opus, sonnet, haiku. Call agent_options for the list." },
+  model: { type: "string", description: "Model alias: sonnet or opus (fable only if the user asks). Omit to use the default." },
   effort: { type: "string", description: "Reasoning effort: low, medium, high, xhigh, max." },
   mode: {
     type: "string",

@@ -9,10 +9,11 @@ import { TaskRegistry } from "../tasks/registry.js";
 import { describeEvent } from "../tasks/notices.js";
 import type { TaskEvent } from "../tasks/types.js";
 import { ClaudeAcpWorker } from "../workers/claude-acp.js";
+import { loadEnv } from "../config.js";
 
 const log = (...a: unknown[]) => console.log(new Date().toISOString().slice(11, 23), ...a);
 const registry = new TaskRegistry();
-const worker = new ClaudeAcpWorker(registry, log);
+const worker = new ClaudeAcpWorker(registry, log, { blockedModels: loadEnv().CLAUDE_BLOCKED_MODELS });
 const tools = new TaskTools(registry, worker, [dirname(process.cwd())]);
 const ctx = { userTranscript: "count the typescript files in the voice agent project" };
 
@@ -25,7 +26,7 @@ const dispatched = await tools.execute(
     title: "Smoke test",
     goal: "Count the TypeScript files under src/ in this project and name the three largest. Do not modify anything.",
     project: "Voice Agent",
-    model: "haiku",
+    model: "sonnet",
     effort: "low",
   }),
   ctx,
@@ -45,7 +46,7 @@ while (event.type === "needs_input") {
 log(`${event.type} after ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 log("spoken update ->", describeEvent(event));
 log("status ->", JSON.stringify(await tools.execute("get_task", JSON.stringify({ task_id: taskId }), ctx)).slice(0, 600));
-log("configure ->", JSON.stringify(await tools.execute("configure_task", JSON.stringify({ task_id: taskId, model: "sonnet", effort: "medium" }), ctx)));
+log("configure ->", JSON.stringify(await tools.execute("configure_task", JSON.stringify({ task_id: taskId, model: "opus", effort: "medium" }), ctx)));
 log("agent_options ->", JSON.stringify(await tools.execute("agent_options", "{}", ctx)).slice(0, 300));
 
 worker.shutdown();

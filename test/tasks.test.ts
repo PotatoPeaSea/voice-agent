@@ -102,3 +102,14 @@ describe("TaskTools", () => {
     });
   });
 });
+
+describe("ClaudeAcpWorker model policy", () => {
+  it("refuses blocked models before touching any session", async () => {
+    const { ClaudeAcpWorker } = await import("../src/workers/claude-acp.js");
+    const registry = new TaskRegistry();
+    const worker = new ClaudeAcpWorker(registry, () => {}, { blockedModels: ["haiku"] });
+    const task = registry.create({ title: "x", goal: "x", cwd: ".", worker: "claude-code", settings: {} });
+    await expect(worker.configure(task, { model: "claude-haiku-4-5" })).rejects.toThrow(/blocked/);
+    await expect(worker.configure(task, { model: "Haiku" })).rejects.toThrow(/blocked/);
+  });
+});

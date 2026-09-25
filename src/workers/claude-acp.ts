@@ -34,11 +34,22 @@ export class ClaudeAcpWorker implements WorkerAdapter {
   private readonly byTask = new Map<string, SessionState>();
   private lastConfigOptions: acp.SessionConfigOption[] = [];
 
+  private readonly defaults: TaskSettings;
+  private readonly blockedModels: string[];
+
   constructor(
     private readonly registry: TaskRegistry,
     private readonly log: (...a: unknown[]) => void,
-    private readonly defaults: TaskSettings = {},
-  ) {}
+    options: { defaults?: TaskSettings; blockedModels?: string[] } = {},
+  ) {
+    this.defaults = options.defaults ?? {};
+    this.blockedModels = (options.blockedModels ?? []).map((m) => m.toLowerCase());
+  }
+
+  private isBlocked(model: string): boolean {
+    const id = model.toLowerCase();
+    return this.blockedModels.some((blocked) => id.includes(blocked));
+  }
 
   private connect(): Promise<acp.ClientSideConnection> {
     if (this.ready) return this.ready;
@@ -104,6 +115,9 @@ export class ClaudeAcpWorker implements WorkerAdapter {
   }
 
   async configure(task: Task, settings: TaskSettings): Promise<{ settings: TaskSettings; ignored: string[] }> {
+    if (settings.model && this.isBlocked(settings.model)) {
+      throw new Error(`Model "${settings.model}" is blocked by configuration. Choose another model (see agent_options).`);
+    }
     const state = this.state(task);
     const connection = await this.connect();
     const ignored: string[] = [];
@@ -168,7 +182,9 @@ export class ClaudeAcpWorker implements WorkerAdapter {
       .filter((o) => (SETTING_IDS as readonly string[]).includes(o.id) && o.type === "select")
       .map((o) => {
         const select = o as acp.SessionConfigOption & { type: "select"; options: acp.SessionConfigSelectOptions };
-        const flat = select.options.flatMap((x) => ("options" in x ? x.options : [x]));
+        const flat = select.options
+          .flatMap((x) => ("options" in x ? x.options : [x]))
+          .filter((c) => o.id !== "model" || !(this.isBlocked(c.value) || this.isBlocked(c.name)));
         return {
           id: o.id,
           name: o.name,

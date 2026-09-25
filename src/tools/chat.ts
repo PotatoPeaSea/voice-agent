@@ -23,7 +23,10 @@ const log = (...a: unknown[]) => console.log(dim(a.map(String).join(" ")));
 
 const roots = (env.WORKER_ROOTS?.split(",") ?? [dirname(process.cwd())]).map((r) => resolve(r.trim()));
 const registry = new TaskRegistry();
-const worker = new ClaudeAcpWorker(registry, log, { model: env.CLAUDE_MODEL, effort: env.CLAUDE_EFFORT, mode: env.CLAUDE_MODE });
+const worker = new ClaudeAcpWorker(registry, log, {
+  defaults: { model: env.CLAUDE_MODEL, effort: env.CLAUDE_EFFORT, mode: env.CLAUDE_MODE },
+  blockedModels: env.CLAUDE_BLOCKED_MODELS,
+});
 const taskTools = new TaskTools(registry, worker, roots);
 const tools = { definitions: TOOL_DEFINITIONS, execute: taskTools.execute.bind(taskTools) };
 const chat = new ChatModel(env);
