@@ -39,7 +39,12 @@ export interface Task {
   title: string;
   goal: string;
   cwd: string;
+  /** Name of the WorkerAdapter running it, e.g. "claude-code" or "hermes". */
   worker: string;
+  /** The worker's session id (ACP), kept so the session can be resumed after a restart. */
+  sessionId?: string;
+  /** Discord thread (or channel) its reports are posted to, and the live status message in it. */
+  discord?: { channelId: string; statusMessageId?: string };
   status: TaskStatus;
   createdAt: number;
   updatedAt: number;

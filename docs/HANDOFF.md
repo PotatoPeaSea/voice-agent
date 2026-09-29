@@ -12,6 +12,20 @@ M0 (Discord voice under DAVE E2EE) and Claude Code agents over ACP are verified 
 a live test with real API keys yet — that's worth doing before trusting any of the latency-sensitive
 work below. Qwen3-TTS (local GPU + DashScope cloud fallback) is wired in and active.
 
+**Update 2026-09-29 (items 1–3 implemented):**
+- Shared ACP plumbing now lives in `src/workers/acp.ts` (`AcpWorker`); `claude-acp.ts` and
+  `hermes-acp.ts` are thin subclasses. `TaskTools` takes several workers and `dispatch_task` has a
+  `worker` param (hidden when only one worker is enabled). Hermes **does** speak ACP (`hermes-acp`,
+  session modes + `session/set_model`, no config options) and passes the smoke test's plumbing, but
+  it's **off by default** (`HERMES_ACP_COMMAND`) — its Groq model returns 413 for Hermes's prompt
+  size, and on DeepSeek a task hung until the ACP connection closed. Revisit before enabling.
+- `src/bot/reports.ts` (`TaskReporter`) posts a thread per task (or messages in the voice channel's
+  chat) with the brief, a throttled live status message, and each turn's report.
+- `TaskRegistry` persists to `data/tasks/registry.json`; in-flight tasks reload as `failed`
+  ("interrupted by a restart") and a follow-up reattaches via ACP `session/resume` — both
+  `claude-agent-acp` and Hermes advertise `loadSession` + `resume`. Verified live for Claude Code
+  (`npm run agent:smoke`): the resumed session remembered its earlier answer.
+
 ## Architecture map
 
 - **`src/main.ts`** — entry point. Wires one `TaskRegistry`, one `WorkerAdapter` (currently only

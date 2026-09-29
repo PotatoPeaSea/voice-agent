@@ -13,14 +13,23 @@ export interface ToolContext {
 }
 
 const settingProps = {
-  model: { type: "string", description: "Model alias: sonnet or opus (fable only if the user asks). Omit to use the default." },
-  effort: { type: "string", description: "Reasoning effort: low, medium, high, xhigh, max." },
+  model: {
+    type: "string",
+    description:
+      "Claude Code: sonnet or opus (fable only if the user asks). Hermes: a model name from agent_options, only if the user names one. Omit to use the default.",
+  },
+  effort: { type: "string", description: "Claude Code only. Reasoning effort: low, medium, high, xhigh, max." },
   mode: {
     type: "string",
-    description: "Permission mode: default (asks before changes), acceptEdits, plan (plan first), auto, bypassPermissions.",
+    description:
+      "Permission mode. Claude Code: default (asks before changes), acceptEdits, plan (plan first), auto, bypassPermissions. Hermes: default, accept_edits, dont_ask.",
   },
-  fast: { type: "string", enum: ["on", "off"], description: "Fast mode." },
+  fast: { type: "string", enum: ["on", "off"], description: "Claude Code only. Fast mode." },
 } as const;
+
+/** Workers the front model can pick from. */
+const WORKER_NAMES = ["claude-code", "hermes"];
+const DEFAULT_WORKER = "claude-code";
 
 export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
   {
@@ -35,8 +44,8 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "agent_options",
-      description: "List the coding agent's available models, effort levels and permission modes.",
-      parameters: { type: "object", properties: {} },
+      description: "List an agent's available models, effort levels and permission modes.",
+      parameters: { type: "object", properties: { worker: { type: "string", enum: WORKER_NAMES } } },
     },
   },
   {
@@ -44,18 +53,27 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
     function: {
       name: "dispatch_task",
       description:
-        "Start a Claude Code agent on a task in a project folder. It works in the background and you are notified when it finishes or needs permission. Only call after the user confirmed the read-back.",
+        "Start an agent on a task. It works in the background and you are notified when it finishes or needs permission. Only call after the user confirmed the read-back.",
       parameters: {
         type: "object",
         properties: {
+          worker: {
+            type: "string",
+            enum: WORKER_NAMES,
+            description:
+              "claude-code (default): anything about code or files in a project folder. hermes: Hermes Agent, a general assistant with web browsing, research, messaging and scheduling tools — for work that isn't about a code project, or when the user asks for Hermes; needs no project. The model/effort rules are for claude-code; for hermes leave model unset unless the user names one, and never set effort.",
+          },
           title: { type: "string", description: "Short name for the task, 2-5 words." },
           goal: { type: "string", description: "Complete, specific instructions for the agent." },
-          project: { type: "string", description: "Project folder name from list_projects, or an absolute path inside an allowed root." },
+          project: {
+            type: "string",
+            description: "Project folder name from list_projects, or an absolute path inside an allowed root. Required for claude-code.",
+          },
           done_when: { type: "string", description: "How the agent knows it's finished." },
           constraints: { type: "string", description: "Things the agent must or must not do." },
           ...settingProps,
         },
-        required: ["title", "goal", "project"],
+        required: ["title", "goal"],
       },
     },
   },
@@ -128,13 +146,38 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
   },
 ];
 
-/** Executes the front model's tool calls against the task registry and worker. */
+/** Executes the front model's tool calls against the task registry and workers. */
 export class TaskTools {
+  private readonly workers: Map<string, WorkerAdapter>;
+
   constructor(
     private readonly registry: TaskRegistry,
-    private readonly worker: WorkerAdapter,
+    workers: WorkerAdapter | WorkerAdapter[],
     private readonly roots: string[],
-  ) {}
+  ) {
+    this.workers = new Map([workers].flat().map((w) => [w.name, w]));
+  }
+
+  /** Tool definitions offering only the configured workers (no worker choice at all when there's one). */
+  get definitions(): ChatCompletionTool[] {
+    const names = [...this.workers.keys()];
+    if (names.length > 1) return TOOL_DEFINITIONS;
+    return TOOL_DEFINITIONS.map((tool) => {
+      if (tool.type !== "function") return tool;
+      const params = tool.function.parameters as { properties?: Record<string, unknown> } | undefined;
+      if (!params?.properties?.worker) return tool;
+      const { worker: _, ...properties } = params.properties;
+      return { ...tool, function: { ...tool.function, parameters: { ...params, properties } } };
+    });
+  }
+
+  /** A worker by name; with no name, Claude Code (or the only worker configured). */
+  private worker(name?: string): WorkerAdapter {
+    const wanted = name?.trim().toLowerCase();
+    const worker = wanted ? this.workers.get(wanted) : (this.workers.get(DEFAULT_WORKER) ?? [...this.workers.values()][0]);
+    if (!worker) throw new Error(`No worker "${name}". Available: ${[...this.workers.keys()].join(", ")}`);
+    return worker;
+  }
 
   async execute(name: string, rawArgs: string, ctx: ToolContext): Promise<unknown> {
     let args: Record<string, string>;
@@ -148,24 +191,32 @@ export class TaskTools {
         case "list_projects":
           return this.listProjects();
         case "agent_options":
-          return await this.worker.settings();
+          return await this.worker(args.worker).settings();
         case "dispatch_task":
           return await this.dispatch(args, ctx);
         case "list_tasks":
-          return this.registry.list().map((t) => ({ id: t.id, title: t.title, status: t.status, project: t.cwd }));
+          return this.registry.list().map((t) => ({ id: t.id, title: t.title, worker: t.worker, status: t.status, project: t.cwd }));
         case "get_task":
           return this.describe(this.task(args.task_id), args.detail ?? "status");
-        case "send_to_task":
-          await this.worker.send(this.task(args.task_id), args.message);
+        case "send_to_task": {
+          const task = this.task(args.task_id);
+          await this.worker(task.worker).send(task, args.message);
           return { ok: true };
-        case "configure_task":
-          return await this.worker.configure(this.task(args.task_id), pickSettings(args));
-        case "answer_permission":
-          this.worker.answerPermission(this.task(args.task_id), args.option_id);
+        }
+        case "configure_task": {
+          const task = this.task(args.task_id);
+          return await this.worker(task.worker).configure(task, pickSettings(args));
+        }
+        case "answer_permission": {
+          const task = this.task(args.task_id);
+          this.worker(task.worker).answerPermission(task, args.option_id);
           return { ok: true };
-        case "cancel_task":
-          await this.worker.cancel(this.task(args.task_id));
+        }
+        case "cancel_task": {
+          const task = this.task(args.task_id);
+          await this.worker(task.worker).cancel(task);
           return { ok: true };
+        }
         default:
           return { error: `unknown tool ${name}` };
       }
@@ -213,12 +264,15 @@ export class TaskTools {
   }
 
   private async dispatch(args: Record<string, string>, ctx: ToolContext): Promise<unknown> {
-    const cwd = this.resolveProject(args.project);
+    const worker = this.worker(args.worker);
+    if (!args.project && worker.name === DEFAULT_WORKER) throw new Error("project is required for claude-code. Use list_projects.");
+    // Hermes work often isn't about a project; it then starts in the first allowed root.
+    const cwd = args.project ? this.resolveProject(args.project) : this.roots[0]!;
     const task = this.registry.create({
       title: args.title,
       goal: args.goal,
       cwd,
-      worker: this.worker.name,
+      worker: worker.name,
       settings: pickSettings(args),
     });
     const prompt = buildBrief({
@@ -229,16 +283,16 @@ export class TaskTools {
       userTranscript: ctx.userTranscript,
     });
     try {
-      await this.worker.start(task, prompt);
+      await worker.start(task, prompt);
     } catch (err) {
       this.registry.update(task, { status: "failed", error: (err as Error).message });
       throw err;
     }
-    return { task_id: task.id, project: cwd, settings: task.settings, ...(task.notes ? { notes: task.notes } : {}) };
+    return { task_id: task.id, worker: worker.name, project: cwd, settings: task.settings, ...(task.notes ? { notes: task.notes } : {}) };
   }
 
   private describe(task: Task, detail: string): unknown {
-    const base = { id: task.id, title: task.title, status: task.status, project: task.cwd, settings: task.settings };
+    const base = { id: task.id, title: task.title, worker: task.worker, status: task.status, project: task.cwd, settings: task.settings };
     if (task.error) Object.assign(base, { error: task.error });
     if (task.pendingPermission) Object.assign(base, { pending_permission: task.pendingPermission });
     if (detail === "full") return { ...base, final_message: task.report?.full ?? task.currentText };

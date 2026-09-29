@@ -55,8 +55,24 @@ const EnvSchema = z.object({
   CLAUDE_EFFORT: withDefault("medium"),
   /** Blank = your Claude Code settings' default permission mode. */
   CLAUDE_MODE: optional,
-  /** Models agents may never use (comma-separated, matched as substrings of the model id). */
+  /** Models agents (Claude Code and Hermes) may never use (comma-separated, matched as substrings of the model id). */
   CLAUDE_BLOCKED_MODELS: idList.transform((l) => (l.length ? l : ["haiku"]).map((m) => m.toLowerCase())),
+
+  /**
+   * Command that starts Hermes Agent's ACP server (e.g. "hermes-acp") to offer Hermes as a second worker.
+   * Blank or "off" = Claude Code only.
+   */
+  HERMES_ACP_COMMAND: withDefault("off"),
+  /** Fallback Hermes model (a provider:model id or name from `npm run agent:probe -- hermes`). Blank = Hermes's configured default. */
+  HERMES_MODEL: optional,
+  /** Hermes edit approval: default, accept_edits or dont_ask. Blank = default (asks before edits). */
+  HERMES_MODE: optional,
+
+  /**
+   * Text channel for task reports: one thread per task with live progress and the full report.
+   * Blank = post into the voice channel's own text chat (no threads).
+   */
+  DISCORD_REPORTS_CHANNEL_ID: optional,
 });
 
 export type Env = z.infer<typeof EnvSchema>;

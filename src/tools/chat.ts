@@ -1,6 +1,6 @@
 /**
  * `npm run chat` — talk to the orchestrator by keyboard instead of voice.
- * Same model, prompt, tools and Claude Code workers as the voice bot; task
+ * Same model, prompt, tools and workers (Claude Code, Hermes) as the voice bot; task
  * updates are printed and answered just like they'd be spoken.
  *
  * Scripted: `npm run chat -- "first message" "second message"` sends each message,
@@ -11,11 +11,11 @@ import readline from "node:readline/promises";
 import { loadEnv } from "../config.js";
 import { ChatModel, type ChatMessage } from "../llm/chat.js";
 import { assistantTurn } from "../orchestrator/turn.js";
-import { TOOL_DEFINITIONS, TaskTools } from "../orchestrator/tools.js";
+import { TaskTools } from "../orchestrator/tools.js";
 import { TaskRegistry } from "../tasks/registry.js";
 import { describeEvent } from "../tasks/notices.js";
 import type { TaskEvent } from "../tasks/types.js";
-import { ClaudeAcpWorker } from "../workers/claude-acp.js";
+import { makeWorkers } from "../workers/index.js";
 
 const env = loadEnv();
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -23,12 +23,9 @@ const log = (...a: unknown[]) => console.log(dim(a.map(String).join(" ")));
 
 const roots = (env.WORKER_ROOTS?.split(",") ?? [dirname(process.cwd())]).map((r) => resolve(r.trim()));
 const registry = new TaskRegistry();
-const worker = new ClaudeAcpWorker(registry, log, {
-  defaults: { model: env.CLAUDE_MODEL, effort: env.CLAUDE_EFFORT, mode: env.CLAUDE_MODE },
-  blockedModels: env.CLAUDE_BLOCKED_MODELS,
-});
-const taskTools = new TaskTools(registry, worker, roots);
-const tools = { definitions: TOOL_DEFINITIONS, execute: taskTools.execute.bind(taskTools) };
+const workers = makeWorkers(env, registry, log);
+const taskTools = new TaskTools(registry, workers, roots);
+const tools = { definitions: taskTools.definitions, execute: taskTools.execute.bind(taskTools) };
 const chat = new ChatModel(env);
 const history: ChatMessage[] = [];
 const events: TaskEvent[] = [];
@@ -88,5 +85,6 @@ if (scripted.length) {
     if (line) await turn(line, line);
   }
 }
-worker.shutdown();
+registry.save();
+for (const worker of workers) worker.shutdown();
 process.exit(0);

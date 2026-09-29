@@ -1,7 +1,8 @@
 /**
  * Entry point: live voice conversation in a Discord voice channel.
  * STT (Deepgram Flux) -> LLM (OpenAI-compatible, with tools) -> TTS (voice profile) with barge-in.
- * The LLM can dispatch Claude Code agents (via ACP) that work in the background.
+ * The LLM can dispatch Claude Code and Hermes agents (via ACP) that work in the background;
+ * their progress and full reports are mirrored to Discord text.
  */
 import { Client, Events, GatewayIntentBits, type Guild } from "discord.js";
 import { VoiceConnectionStatus, entersState, joinVoiceChannel, type VoiceConnection } from "@discordjs/voice";
@@ -12,10 +13,11 @@ import { makeStt, resolveVoice, speak } from "./speech/index.js";
 import { loadVoices } from "./speech/voices.js";
 import { dirname, resolve } from "node:path";
 import { VoiceSession } from "./orchestrator/session.js";
-import { TOOL_DEFINITIONS, TaskTools } from "./orchestrator/tools.js";
+import { TaskTools } from "./orchestrator/tools.js";
 import { TaskRegistry } from "./tasks/registry.js";
 import { describeEvent } from "./tasks/notices.js";
-import { ClaudeAcpWorker } from "./workers/claude-acp.js";
+import { makeWorkers } from "./workers/index.js";
+import { TaskReporter } from "./bot/reports.js";
 
 const env = loadEnv();
 const log = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 23), ...args);
@@ -29,12 +31,9 @@ let lastActive: VoiceSession | undefined;
 
 const roots = (env.WORKER_ROOTS?.split(",") ?? [dirname(process.cwd())]).map((r) => resolve(r.trim())).filter(Boolean);
 const registry = new TaskRegistry();
-const worker = new ClaudeAcpWorker(registry, log, {
-  defaults: { model: env.CLAUDE_MODEL, effort: env.CLAUDE_EFFORT, mode: env.CLAUDE_MODE },
-  blockedModels: env.CLAUDE_BLOCKED_MODELS,
-});
-const taskTools = new TaskTools(registry, worker, roots);
-const tools = { definitions: TOOL_DEFINITIONS, execute: taskTools.execute.bind(taskTools) };
+const workers = makeWorkers(env, registry, log);
+const taskTools = new TaskTools(registry, workers, roots);
+const tools = { definitions: taskTools.definitions, execute: taskTools.execute.bind(taskTools) };
 
 registry.on("event", (event) => {
   const text = describeEvent(event);
@@ -87,6 +86,10 @@ async function joinVoice(guild: Guild): Promise<VoiceConnection> {
 client.once(Events.ClientReady, async (c) => {
   log(`logged in as ${c.user.tag}`);
   const guild = await c.guilds.fetch(env.DISCORD_GUILD_ID);
+  const reporter = new TaskReporter(client, registry, env.DISCORD_REPORTS_CHANNEL_ID ?? env.DISCORD_VOICE_CHANNEL_ID, log);
+  await reporter.start().catch((err: Error) => log(`task reports disabled: ${err.message}`));
+  const restored = registry.list();
+  if (restored.length) log(`restored ${restored.length} task(s) from data/tasks/registry.json`);
   let connection: VoiceConnection;
   try {
     connection = await joinVoice(guild);
@@ -117,7 +120,7 @@ client.once(Events.ClientReady, async (c) => {
   ]);
   log(
     `voice: ${voices.active} (${primary.tts.name}${fallback ? `, fallback ${fallback.tts.name}` : ""}), ` +
-      `llm: ${env.LLM_MODEL}, stt: ${env.STT_PROVIDER}, agent roots: ${roots.join(", ")}`,
+      `llm: ${env.LLM_MODEL}, stt: ${env.STT_PROVIDER}, agents: ${workers.map((w) => w.name).join(", ")}, roots: ${roots.join(", ")}`,
   );
 
   connection.receiver.speaking.on("start", (userId) => {
@@ -149,7 +152,8 @@ async function shutdown(): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
   for (const session of sessions.values()) session.close();
-  worker.shutdown();
+  registry.save();
+  for (const worker of workers) worker.shutdown();
   voiceConnection?.destroy(); // sends the voice-state "leave" to Discord
   await new Promise((r) => setTimeout(r, 500)); // let the leave go out before the gateway closes
   await client.destroy();

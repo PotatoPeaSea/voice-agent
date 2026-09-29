@@ -9,6 +9,10 @@ import { TaskRegistry } from "../src/tasks/registry.js";
 import type { Task, TaskSettings } from "../src/tasks/types.js";
 import type { WorkerAdapter } from "../src/workers/types.js";
 import type { ChatMessage } from "../src/llm/chat.js";
+import { matchModel } from "../src/workers/hermes-acp.js";
+import { renderStatus } from "../src/bot/reports.js";
+
+const tmpDir = () => mkdtempSync(join(tmpdir(), "tasks-"));
 
 describe("reports", () => {
   it("splits the voice summary into headline and bullets", () => {
@@ -51,12 +55,12 @@ describe("trimHistory", () => {
 });
 
 class FakeWorker implements WorkerAdapter {
-  readonly name = "fake";
+  constructor(readonly name = "claude-code") {}
   started: { task: Task; prompt: string }[] = [];
   async start(task: Task, prompt: string) {
     this.started.push({ task, prompt });
   }
-  async send() {}
+  async send(_task: Task, _message: string) {}
   async configure(_task: Task, settings: TaskSettings) {
     return { settings, ignored: [] };
   }
@@ -72,7 +76,7 @@ describe("TaskTools", () => {
   const root = mkdtempSync(join(tmpdir(), "roots-"));
   mkdirSync(join(root, "Voice Agent"));
   const worker = new FakeWorker();
-  const tools = new TaskTools(new TaskRegistry(), worker, [root]);
+  const tools = new TaskTools(new TaskRegistry({ dir: tmpDir() }), worker, [root]);
 
   it("resolves spoken project names case- and space-insensitively", () => {
     expect(tools.resolveProject("voice agent")).toBe(join(root, "Voice Agent"));
@@ -96,6 +100,28 @@ describe("TaskTools", () => {
     expect(started.prompt).toContain("hey run the tests");
   });
 
+  it("routes tasks to the named worker and keeps using it for follow-ups", async () => {
+    const claude = new FakeWorker("claude-code");
+    const hermes = new FakeWorker("hermes");
+    const sent: string[] = [];
+    hermes.send = async (task: Task) => {
+      sent.push(task.id);
+    };
+    const routed = new TaskTools(new TaskRegistry({ dir: tmpDir() }), [claude, hermes], [root]);
+    const result = (await routed.execute("dispatch_task", JSON.stringify({ worker: "hermes", title: "Research", goal: "Look it up" }), {
+      userTranscript: "",
+    })) as { task_id: string; worker: string; project: string };
+    expect(result.worker).toBe("hermes");
+    expect(result.project).toBe(root); // no project needed for hermes
+    expect(hermes.started).toHaveLength(1);
+    expect(claude.started).toHaveLength(0);
+    await routed.execute("send_to_task", JSON.stringify({ task_id: result.task_id, message: "more" }), { userTranscript: "" });
+    expect(sent).toEqual([result.task_id]);
+    expect(await routed.execute("dispatch_task", JSON.stringify({ title: "x", goal: "y" }), { userTranscript: "" })).toEqual({
+      error: "project is required for claude-code. Use list_projects.",
+    });
+  });
+
   it("returns errors to the model instead of throwing", async () => {
     expect(await tools.execute("get_task", '{"task_id":"t99"}', { userTranscript: "" })).toEqual({
       error: 'No task "t99". Use list_tasks.',
@@ -106,10 +132,68 @@ describe("TaskTools", () => {
 describe("ClaudeAcpWorker model policy", () => {
   it("refuses blocked models before touching any session", async () => {
     const { ClaudeAcpWorker } = await import("../src/workers/claude-acp.js");
-    const registry = new TaskRegistry();
+    const registry = new TaskRegistry({ dir: tmpDir() });
     const worker = new ClaudeAcpWorker(registry, () => {}, { blockedModels: ["haiku"] });
     const task = registry.create({ title: "x", goal: "x", cwd: ".", worker: "claude-code", settings: {} });
     await expect(worker.configure(task, { model: "claude-haiku-4-5" })).rejects.toThrow(/blocked/);
     await expect(worker.configure(task, { model: "Haiku" })).rejects.toThrow(/blocked/);
+  });
+});
+
+describe("TaskRegistry persistence", () => {
+  it("reloads tasks and marks in-flight ones as interrupted", () => {
+    const dir = tmpDir();
+    const first = new TaskRegistry({ dir });
+    const done = first.create({ title: "done", goal: "g", cwd: ".", worker: "claude-code", settings: {} });
+    first.update(done, { status: "idle", sessionId: "s1", report: { headline: "ok", bullets: [], full: "ok" } });
+    const busy = first.create({ title: "busy", goal: "g", cwd: ".", worker: "hermes", settings: {} });
+    first.update(busy, {
+      status: "needs_input",
+      sessionId: "s2",
+      currentText: "half a thought",
+      pendingPermission: { question: "edit?", options: [] },
+    });
+    first.save();
+
+    const second = new TaskRegistry({ dir });
+    expect(second.get("t1")).toMatchObject({ status: "idle", sessionId: "s1", report: { headline: "ok" } });
+    const reloaded = second.get("t2")!;
+    expect(reloaded.status).toBe("failed");
+    expect(reloaded.error).toMatch(/Interrupted by a restart.*follow-up/);
+    expect(reloaded.pendingPermission).toBeUndefined();
+    expect(reloaded.currentText).toBe("");
+    expect(second.create({ title: "n", goal: "g", cwd: ".", worker: "claude-code", settings: {} }).id).toBe("t3");
+  });
+});
+
+describe("Hermes model matching", () => {
+  const models = {
+    currentModelId: "openrouter:anthropic/claude-opus-5",
+    availableModels: [
+      { modelId: "openrouter:anthropic/claude-sonnet-5.5", name: "OpenRouter · anthropic/claude-sonnet-5.5" },
+      { modelId: "openrouter:anthropic/claude-sonnet-5", name: "OpenRouter · anthropic/claude-sonnet-5" },
+      { modelId: "anthropic:claude-sonnet-5", name: "Anthropic · claude-sonnet-5" },
+      { modelId: "custom:qwen/qwen3.8-27b", name: "qwen/qwen3.8-27b" },
+    ],
+  };
+  it("matches spoken names, preferring the current provider and the most specific id", () => {
+    expect(matchModel(models, "sonnet 5")).toBe("openrouter:anthropic/claude-sonnet-5");
+    expect(matchModel(models, "Qwen 3.8")).toBe("custom:qwen/qwen3.8-27b");
+    expect(matchModel(models, "anthropic:claude-sonnet-5")).toBe("anthropic:claude-sonnet-5");
+    expect(matchModel(models, "gpt")).toBeUndefined();
+  });
+});
+
+describe("Discord status message", () => {
+  it("shows status, plan and recent actions within Discord's limit", () => {
+    const task = new TaskRegistry({ dir: tmpDir() }).create({ title: "t", goal: "g", cwd: ".", worker: "claude-code", settings: { model: "sonnet" } });
+    task.status = "running";
+    task.plan = ["[completed] read code", "[in_progress] fix bug"];
+    task.tools = Array.from({ length: 40 }, (_, i) => ({ id: String(i), title: `Read file ${i} `.repeat(30), status: "completed" }));
+    const text = renderStatus(task);
+    expect(text).toContain("t1 running");
+    expect(text).toContain("40 tool calls");
+    expect(text).toContain("[in_progress] fix bug");
+    expect(text.length).toBeLessThanOrEqual(1900);
   });
 });
