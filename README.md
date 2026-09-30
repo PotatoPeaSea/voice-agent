@@ -91,3 +91,13 @@ Useful commands:
 - `npm run agent:smoke` — run a tiny read-only task end to end.
 
 Task logs and reports are written to `data/tasks/`.
+
+### Hold music while agents work
+Put audio files (mp3, wav, ogg, flac, m4a...) in `music/` (or point `MUSIC_PATH` at a file or folder). After a task
+is dispatched and the call has been quiet for `MUSIC_DELAY_SECONDS` (default 5), the bot plays them shuffled at
+`MUSIC_VOLUME` (default 0.2). The music stops the moment anyone speaks, a task reports back or asks permission, or no
+task is running any more, and never plays over the bot's own speech. `MUSIC_ENABLED=false` turns it off; without
+files or ffmpeg there's simply no music.
+
+The tracks in `music/` (`grateful.mp3`, `moonlight.mp3`) were copied from the user's NAS, Potato Server, at the
+SMB share `\\<nas-host>\nas\music`, which holds the full music library and is the source for hold-music tracks.

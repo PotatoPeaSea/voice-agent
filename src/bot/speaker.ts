@@ -14,10 +14,13 @@ import {
  * Plays streamed 48kHz stereo PCM into a voice connection.
  * Gaps in the stream (TTS still generating) are filled with silence instead of
  * ending playback; playback ends when the stream ends or stop() is called.
+ * Background audio (hold music) plays through the same player, so starting
+ * speech always replaces it; it never counts as speaking.
  */
 export class Speaker {
   private readonly player: AudioPlayer;
   private current?: PassThrough;
+  private background = false;
 
   constructor(connection: VoiceConnection, private readonly log: (...a: unknown[]) => void) {
     this.player = createAudioPlayer({
@@ -28,7 +31,11 @@ export class Speaker {
   }
 
   get isSpeaking(): boolean {
-    return this.player.state.status !== AudioPlayerStatus.Idle;
+    return !this.background && this.player.state.status !== AudioPlayerStatus.Idle;
+  }
+
+  get isPlayingBackground(): boolean {
+    return this.background && this.player.state.status !== AudioPlayerStatus.Idle;
   }
 
   /** Play a short burst of silence so the Opus encoder is initialized before the first real reply. */
@@ -58,6 +65,39 @@ export class Speaker {
       this.player.on(AudioPlayerStatus.Idle, onIdle);
     });
 
+    await this.pump(pcm, stream);
+    await finished;
+    if (onFirstAudio) this.player.off(AudioPlayerStatus.Playing, onFirstAudio);
+  }
+
+  /**
+   * Play background audio until it ends, stopBackground() or stop() is called,
+   * or play() starts speech. Does nothing while speech is playing.
+   */
+  playBackground(pcm: AsyncIterable<Buffer>): void {
+    if (this.isSpeaking) return;
+    this.stop();
+    const stream = new PassThrough({ highWaterMark: 48_000 * 4 });
+    this.current = stream;
+    this.background = true;
+    this.player.play(createAudioResource(stream, { inputType: StreamType.Raw }));
+    void this.pump(pcm, stream);
+  }
+
+  /** Stop background audio, leaving speech alone. */
+  stopBackground(): void {
+    if (this.background) this.stop();
+  }
+
+  /** Stop immediately (barge-in). */
+  stop(): void {
+    if (this.current && !this.current.destroyed) this.current.destroy();
+    this.current = undefined;
+    this.background = false;
+    if (this.player.state.status !== AudioPlayerStatus.Idle) this.player.stop(true);
+  }
+
+  private async pump(pcm: AsyncIterable<Buffer>, stream: PassThrough): Promise<void> {
     try {
       for await (const chunk of pcm) {
         if (stream.destroyed) break;
@@ -68,14 +108,5 @@ export class Speaker {
     } finally {
       if (!stream.destroyed) stream.end();
     }
-    await finished;
-    if (onFirstAudio) this.player.off(AudioPlayerStatus.Playing, onFirstAudio);
-  }
-
-  /** Stop immediately (barge-in). */
-  stop(): void {
-    if (this.current && !this.current.destroyed) this.current.destroy();
-    this.current = undefined;
-    if (this.player.state.status !== AudioPlayerStatus.Idle) this.player.stop(true);
   }
 }

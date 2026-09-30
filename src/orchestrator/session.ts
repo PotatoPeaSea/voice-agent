@@ -111,6 +111,11 @@ export class VoiceSession {
     clearInterval(this.noticeTimer);
   }
 
+  /** Nothing being said, heard or waiting to be said (hold music may play). */
+  get quiet(): boolean {
+    return this.idle && !this.notices.length;
+  }
+
   private get idle(): boolean {
     return !this.turn && !this.userSpeaking && !this.deps.speaker.isSpeaking;
   }

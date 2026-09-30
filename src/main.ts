@@ -6,6 +6,7 @@
  *
  * The bot follows allowed users into voice (VOICE_AUTO_JOIN) and can be moved with
  * /join, /leave and /newchat; leaving the call keeps it online and tasks running.
+ * While agents work and nobody is talking, optional hold music fills the silence.
  */
 import { Client, Events, GatewayIntentBits, MessageFlags, type ChatInputCommandInteraction, type Guild } from "discord.js";
 import { VoiceConnectionStatus, entersState, joinVoiceChannel, type VoiceConnection } from "@discordjs/voice";
@@ -31,6 +32,8 @@ import { makeWorkers } from "./workers/index.js";
 import { TaskReporter } from "./bot/reports.js";
 import { COMMANDS } from "./bot/commands.js";
 import { voiceAutocomplete, voiceCommand, type VoiceCommandDeps } from "./bot/voice-command.js";
+import { HoldMusic, isWorking } from "./bot/hold-music.js";
+import { MusicLibrary } from "./audio/music.js";
 
 const env = loadEnv();
 const log = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 23), ...args);
@@ -47,6 +50,7 @@ const registry = new TaskRegistry();
 const workers = makeWorkers(env, registry, log);
 const taskTools = new TaskTools(registry, workers, roots);
 const tools = { definitions: taskTools.definitions, execute: taskTools.execute.bind(taskTools) };
+const music = env.MUSIC_ENABLED ? new MusicLibrary(env.MUSIC_PATH, env.MUSIC_VOLUME, log) : undefined;
 
 /** The current call: one connection and speaker, one VoiceSession per allowed user who has spoken. */
 interface Call {
@@ -55,6 +59,7 @@ interface Call {
   speaker: Speaker;
   sessions: Map<string, VoiceSession>;
   lastActive?: VoiceSession;
+  holdMusic?: HoldMusic;
 }
 let call: Call | undefined;
 let guild: Guild;
@@ -62,6 +67,7 @@ let guild: Guild;
 registry.on("event", (event) => {
   const text = describeEvent(event);
   log(`task event: ${text.split("\n")[0]}`);
+  call?.holdMusic?.interrupt();
   call?.lastActive?.notify(text);
 });
 
@@ -155,7 +161,20 @@ function join(channelId: string): Promise<void> {
       );
     }
 
+    if (music) {
+      current.holdMusic = new HoldMusic({
+        speaker,
+        waiting: () => registry.list().some(isWorking),
+        quiet: () =>
+          connection.receiver.speaking.users.size === 0 && [...current.sessions.values()].every((s) => s.quiet),
+        source: (signal) => (music.tracks().length ? music.play(signal) : undefined),
+        delayMs: env.MUSIC_DELAY_SECONDS * 1000,
+        log,
+      });
+    }
+
     connection.receiver.speaking.on("start", (userId) => {
+      if (call === current) current.holdMusic?.interrupt(); // never play over anyone, allowed or not
       if (!isAllowed(userId) || call !== current) return;
       let session = current.sessions.get(userId);
       if (!session) {
@@ -188,6 +207,7 @@ async function leaveNow(reason: string): Promise<void> {
   call = undefined;
   clearTimeout(emptyTimer);
   emptyTimer = undefined;
+  current.holdMusic?.dispose();
   for (const session of current.sessions.values()) session.close();
   current.connection.destroy(); // sends the voice-state "leave" to Discord
   log(`left voice (${reason})`);
@@ -334,6 +354,8 @@ client.once(Events.ClientReady, async (c) => {
   await reporter.start().catch((err: Error) => log(`task reports disabled: ${err.message}`));
   const restored = registry.list();
   if (restored.length) log(`restored ${restored.length} task(s) from data/tasks/registry.json`);
+  const tracks = music?.tracks().length; // logs why when there are none
+  if (tracks) log(`hold music: ${tracks} track(s) from ${env.MUSIC_PATH}, after ${env.MUSIC_DELAY_SECONDS}s of quiet`);
   await guild.commands
     .set(COMMANDS)
     .then(() => log(`slash commands: ${COMMANDS.map((c) => `/${c.name}`).join(" ")}`))

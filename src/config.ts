@@ -29,6 +29,14 @@ const flagDefaultOn = z
   .optional()
   .transform((v) => !v?.trim() || v.trim() === "1" || v.trim() === "true");
 
+/** A number setting where blank means "use the default". */
+const numberWithDefault = (fallback: number, min: number, max: number) =>
+  z
+    .string()
+    .optional()
+    .transform((v) => (v?.trim() ? Number(v) : fallback))
+    .pipe(z.number().min(min).max(max));
+
 const EnvSchema = z.object({
   DISCORD_TOKEN: z.string().min(1, "DISCORD_TOKEN is required"),
   DISCORD_GUILD_ID: z.string().min(1, "DISCORD_GUILD_ID is required"),
@@ -84,6 +92,15 @@ const EnvSchema = z.object({
    * Blank = post into the voice channel's own text chat (no threads).
    */
   DISCORD_REPORTS_CHANNEL_ID: optional,
+
+  /** Play music in voice while agents work and there's nothing to say (needs ffmpeg and files at MUSIC_PATH). */
+  MUSIC_ENABLED: flagDefaultOn,
+  /** An audio file or a folder of them (mp3, wav, ogg, flac, m4a...), relative to where the bot starts. */
+  MUSIC_PATH: withDefault("music"),
+  /** Seconds of quiet before the music starts, so short tasks don't trigger it. */
+  MUSIC_DELAY_SECONDS: numberWithDefault(5, 0, 600),
+  /** Music volume, 0-1 (speech plays at full volume). */
+  MUSIC_VOLUME: numberWithDefault(0.2, 0, 1),
 });
 
 export type Env = z.infer<typeof EnvSchema>;
