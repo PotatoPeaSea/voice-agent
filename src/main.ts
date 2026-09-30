@@ -17,6 +17,14 @@ import { loadVoices } from "./speech/voices.js";
 import { dirname, resolve } from "node:path";
 import { VoiceSession } from "./orchestrator/session.js";
 import { TaskTools } from "./orchestrator/tools.js";
+import {
+  activeSystemPromptName,
+  isSystemPromptName,
+  setActiveSystemPrompt,
+  SYSTEM_PROMPT_DESCRIPTIONS,
+  SYSTEM_PROMPT_NAMES,
+  type SystemPromptName,
+} from "./orchestrator/prompt.js";
 import { TaskRegistry } from "./tasks/registry.js";
 import { describeEvent } from "./tasks/notices.js";
 import { makeWorkers } from "./workers/index.js";
@@ -295,6 +303,19 @@ async function onCommand(interaction: ChatInputCommandInteraction): Promise<void
     case "voice":
       await voiceCommand(interaction, voiceDeps);
       break;
+    case "prompt": {
+      const name = interaction.options.getString("name");
+      const describe = (n: SystemPromptName) => `**${n}** (${SYSTEM_PROMPT_DESCRIPTIONS[n]})`;
+      if (!name || !isSystemPromptName(name)) {
+        const list = SYSTEM_PROMPT_NAMES.map((n) => `${n === activeSystemPromptName() ? "▶" : "•"} ${describe(n)}`).join("\n");
+        await interaction.reply({ content: `System prompts (switch with \`/prompt name:<prompt>\`):\n${list}`, flags: MessageFlags.Ephemeral });
+        break;
+      }
+      setActiveSystemPrompt(name);
+      log(`system prompt switched to ${name} by ${interaction.user.tag}`);
+      await interaction.reply(`System prompt switched to ${describe(name)}. It applies from the next reply.`);
+      break;
+    }
     case "newchat": {
       const session = call?.sessions.get(interaction.user.id);
       if (session) session.reset();

@@ -1,6 +1,6 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { ChatMessage, ChatModel } from "../llm/chat.js";
-import { VOICE_SYSTEM_PROMPT } from "./prompt.js";
+import { activeSystemPrompt } from "./prompt.js";
 import type { ToolContext } from "./tools.js";
 
 const MAX_TOOL_ROUNDS = 5;
@@ -32,7 +32,7 @@ export async function* assistantTurn(opts: TurnOptions): AsyncIterable<string> {
   for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
     let text = "";
     let calls: { id: string; name: string; arguments: string }[] = [];
-    const messages: ChatMessage[] = [{ role: "system", content: VOICE_SYSTEM_PROMPT }, ...history];
+    const messages: ChatMessage[] = [{ role: "system", content: activeSystemPrompt() }, ...history];
     for await (const event of chat.streamWithTools(messages, tools?.definitions ?? [], signal)) {
       if (event.type === "text") {
         text += event.text;

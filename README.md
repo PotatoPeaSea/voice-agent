@@ -65,6 +65,11 @@ Qwen3-TTS on Alibaba Cloud (`qwen-cloud`) if the local service is down or too sl
   the choice as `active` in `config/voices.yaml`.
 - Cloned voices run ~1.3x realtime on an RTX 3060 (presets ~1.7x), because the reference clip is in every prompt.
 
+### System prompts and `/prompt`
+- Two personas in `src/orchestrator/prompt.ts`: `default` (terse assistant) and `chatty` (relaxed, talkative; same agent rules).
+- `/prompt` lists them; `/prompt name:<prompt>` switches for everyone from the next reply. Saying "be chattier" /
+  "back to normal" works too (the `switch_system_prompt` tool). It resets to `default` on restart.
+
 ## Claude Code agents (ACP)
 The voice model can hand work to Claude Code through the [Agent Client Protocol](https://agentclientprotocol.com)
 (`@agentclientprotocol/claude-agent-acp`). It uses your existing Claude Code login.

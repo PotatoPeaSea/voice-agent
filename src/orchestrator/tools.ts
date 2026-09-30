@@ -5,6 +5,13 @@ import type { TaskRegistry } from "../tasks/registry.js";
 import { buildBrief } from "../tasks/report.js";
 import type { Task, TaskSettings } from "../tasks/types.js";
 import type { WorkerAdapter } from "../workers/types.js";
+import {
+  activeSystemPromptName,
+  isSystemPromptName,
+  setActiveSystemPrompt,
+  SYSTEM_PROMPT_DESCRIPTIONS,
+  SYSTEM_PROMPT_NAMES,
+} from "./prompt.js";
 
 /** Context from the current voice turn, passed to every tool call. */
 export interface ToolContext {
@@ -144,6 +151,21 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
       parameters: { type: "object", properties: { task_id: { type: "string" } }, required: ["task_id"] },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "switch_system_prompt",
+      description:
+        "Switch your persona (system prompt) when the user asks, e.g. to be chattier or back to normal. " +
+        "Takes effect from your next reply, so confirm in the new style. Options: " +
+        SYSTEM_PROMPT_NAMES.map((n) => `${n} (${SYSTEM_PROMPT_DESCRIPTIONS[n]})`).join(", "),
+      parameters: {
+        type: "object",
+        properties: { name: { type: "string", enum: SYSTEM_PROMPT_NAMES } },
+        required: ["name"],
+      },
+    },
+  },
 ];
 
 /** Executes the front model's tool calls against the task registry and workers. */
@@ -216,6 +238,13 @@ export class TaskTools {
           const task = this.task(args.task_id);
           await this.worker(task.worker).cancel(task);
           return { ok: true };
+        }
+        case "switch_system_prompt": {
+          const wanted = args.name?.trim().toLowerCase() ?? "";
+          if (!isSystemPromptName(wanted)) throw new Error(`No system prompt "${args.name}". Available: ${SYSTEM_PROMPT_NAMES.join(", ")}`);
+          const previous = activeSystemPromptName();
+          setActiveSystemPrompt(wanted);
+          return { ok: true, previous, active: wanted };
         }
         default:
           return { error: `unknown tool ${name}` };
