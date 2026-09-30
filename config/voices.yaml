@@ -12,29 +12,21 @@ profiles:
     language: English
     fallback: qwen-cloud
 
-  # Cloned from the clips in "Voice sample/" (npm run clone-voice -- clone "Voice sample").
-  # Reference clip + transcript live in services/qwen-tts/voices/clone.{wav,txt}.
-  clone:
-    provider: qwen-local
-    voiceId: clone
-    language: English
-    fallback: qwen
-
-  # Blend: the mall + noodles clips joined into one 27s reference, so every sentence mixes
-  # both deliveries (services/qwen-tts/voices/clone-blend.{wav,txt}). ~0.8-0.9x realtime.
-  clone-blend:
-    provider: qwen-local
-    voiceId: clone-blend
-    language: English
-    fallback: qwen
-    providerOptions:
-      temperature: 1.1
-
   # Short blend: first ~7s of the mall clip + first ~7s of the noodles clip (14.8s total),
   # so it stays realtime (~1.0-1.3x) (services/qwen-tts/voices/clone-short.{wav,txt}).
   clone-short:
     provider: qwen-local
     voiceId: clone-short
+    language: English
+    fallback: qwen
+    providerOptions:
+      temperature: 1.1
+
+  # Shorter still: first ~4.4s of the noodles clip + first ~5.3s of the mall clip (10.2s),
+  # ~1.1-1.4x realtime (services/qwen-tts/voices/clone-tiny.{wav,txt}).
+  clone-tiny:
+    provider: qwen-local
+    voiceId: clone-tiny
     language: English
     fallback: qwen
     providerOptions:
