@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import os from "node:os";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
 import type { TaskRegistry } from "../tasks/registry.js";
@@ -78,6 +79,16 @@ export abstract class AcpWorker implements WorkerAdapter {
     const { cmd, args } = this.command();
     const child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
     this.child = child;
+    // Bursts of file reads/greps/terminal calls from the agent share this machine's CPU with the
+    // local Qwen TTS service; at normal priority they can push a synthesis request past the
+    // first-audio timeout in speech/fallback.ts and trip an (unannounced, sticky) voice failover.
+    if (child.pid) {
+      try {
+        os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL);
+      } catch {
+        // Best-effort; not fatal if the OS/user denies priority changes.
+      }
+    }
     child.stderr?.on("data", () => {}); // agent diagnostics; too chatty to log
     const failed = new Promise<never>((_, reject) => {
       child.on("error", (err) => reject(new Error(`couldn't start ${this.name} (${cmd}): ${err.message}`)));
