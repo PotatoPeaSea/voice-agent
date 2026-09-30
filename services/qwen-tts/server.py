@@ -21,11 +21,12 @@ Env:  QWEN_TTS_MODEL       (default Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice)
       QWEN_TTS_HOST / QWEN_TTS_PORT (default 127.0.0.1:8765)
 """
 
+import asyncio
 import logging
 import os
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Callable
 from pathlib import Path
 
 import numpy as np
@@ -58,6 +59,7 @@ if CLONE_MODEL_ID.lower() != "off":
     log.info("loading %s for cloned voices", CLONE_MODEL_ID)
     clone_model = FasterQwen3TTS.from_pretrained(CLONE_MODEL_ID)
 gpu_lock = threading.Lock()  # one generation at a time; requests queue in order
+CODEC_HZ = 12
 app = FastAPI(title="qwen-tts")
 
 
@@ -84,6 +86,12 @@ def all_speakers() -> list[str]:
     return SPEAKERS + sorted(set(cloned_voices()) - set(SPEAKERS))
 
 
+def max_tokens(text: str) -> int:
+    """Cap a generation at ~0.25s of audio per character (3x normal speech, min 8s) so a
+    sentence that never emits end-of-speech (cloned voices sometimes ramble) can't hog the GPU."""
+    return min(2048, int(CODEC_HZ * max(8.0, len(text) * 0.25)))
+
+
 def generate(req: SynthesizeRequest):
     clone = cloned_voices().get(req.speaker.lower())
     if clone:
@@ -95,6 +103,7 @@ def generate(req: SynthesizeRequest):
             ref_audio=ref_audio,
             ref_text=ref_text,
             chunk_size=CHUNK_FRAMES,
+            max_new_tokens=max_tokens(req.text),
         )
     return model.generate_custom_voice_streaming(
         text=req.text,
@@ -102,6 +111,7 @@ def generate(req: SynthesizeRequest):
         language=req.language or "Auto",
         instruct=req.instruct,
         chunk_size=CHUNK_FRAMES,
+        max_new_tokens=max_tokens(req.text),
     )
 
 
@@ -109,22 +119,61 @@ def to_pcm16(wav: np.ndarray) -> bytes:
     return (np.clip(wav, -1.0, 1.0) * 32767).astype("<i2").tobytes()
 
 
-def stream_pcm(req: SynthesizeRequest) -> Iterator[bytes]:
+def run_generation(req: SynthesizeRequest, emit: Callable[[bytes], None], cancelled: Callable[[], bool]) -> None:
+    """Generate under the GPU lock, handing PCM to emit. Always releases the lock: stops at
+    the next chunk once cancelled() (client hung up, e.g. barge-in) and closes the generator."""
     started = time.perf_counter()
     first_audio = None
     samples = 0
+    stopped = False
     with gpu_lock:
-        for chunk, _sr, _timing in generate(req):
-            if first_audio is None:
-                first_audio = time.perf_counter() - started
-            samples += len(chunk)
-            yield to_pcm16(chunk)
+        gen = generate(req)
+        try:
+            for chunk, _sr, _timing in gen:
+                if cancelled():
+                    stopped = True
+                    break
+                if first_audio is None:
+                    first_audio = time.perf_counter() - started
+                samples += len(chunk)
+                emit(to_pcm16(chunk))
+        finally:
+            gen.close()
     elapsed = time.perf_counter() - started
     audio_s = samples / SAMPLE_RATE
     log.info(
-        "[%s] first audio %.0fms, %.2fs audio in %.2fs (%.1fx realtime): %r",
-        req.speaker, (first_audio or 0) * 1000, audio_s, elapsed, audio_s / max(elapsed, 1e-6), req.text[:60],
+        "[%s] %sfirst audio %.0fms, %.2fs audio in %.2fs (%.1fx realtime): %r",
+        req.speaker, "CANCELLED " if stopped else "", (first_audio or 0) * 1000, audio_s, elapsed,
+        audio_s / max(elapsed, 1e-6), req.text[:60],
     )
+
+
+async def stream_pcm(req: SynthesizeRequest) -> AsyncIterator[bytes]:
+    """Runs the generation on its own thread. If the client disconnects, Starlette cancels this
+    generator and the finally block tells the thread to stop, so the GPU lock is never left held
+    by an abandoned response (which used to stall every later request)."""
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[bytes | Exception | None] = asyncio.Queue()
+    cancel = threading.Event()
+    put = lambda item: loop.call_soon_threadsafe(queue.put_nowait, item)  # noqa: E731
+
+    def worker() -> None:
+        try:
+            run_generation(req, put, cancel.is_set)
+        except Exception as err:  # surfaced to the client as a cut-off stream
+            log.exception("generation failed: %r", req.text[:60])
+            put(err)
+        finally:
+            put(None)
+
+    threading.Thread(target=worker, daemon=True).start()
+    try:
+        while (item := await queue.get()) is not None:
+            if isinstance(item, Exception):
+                raise item
+            yield item
+    finally:
+        cancel.set()
 
 
 def validate(req: SynthesizeRequest) -> None:
@@ -163,7 +212,6 @@ if __name__ == "__main__":
         clone_model.warmup()
         warm += sorted(cloned_voices())  # also caches each reference's voice prompt
     for speaker in warm:
-        for _ in stream_pcm(SynthesizeRequest(text="Warming up the voice.", speaker=speaker, language="English")):
-            pass
+        run_generation(SynthesizeRequest(text="Warming up the voice.", speaker=speaker, language="English"), lambda _: None, lambda: False)
     log.info("warm-up done in %.2fs", time.perf_counter() - t0)
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
