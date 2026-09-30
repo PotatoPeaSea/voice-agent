@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { parse } from "yaml";
 import { z } from "zod";
 import type { VoiceProfile } from "./types.js";
@@ -39,4 +39,17 @@ export function parseVoices(yamlText: string): VoiceConfig {
 
 export function loadVoices(path = "config/voices.yaml"): VoiceConfig {
   return parseVoices(readFileSync(path, "utf8"));
+}
+
+/** Rewrite just the `active:` line so the file's comments and layout survive. */
+export function withActive(yamlText: string, name: string): string {
+  if (!/^active:.*$/m.test(yamlText)) throw new Error("voices.yaml has no top-level `active:` line");
+  return yamlText.replace(/^active:.*$/m, `active: ${name}`);
+}
+
+/** Switch the live config to another profile and remember it for the next start. */
+export function setActiveVoice(config: VoiceConfig, name: string, path = "config/voices.yaml"): void {
+  if (!config.profiles[name]) throw new Error(`Unknown voice "${name}"`);
+  config.active = name;
+  writeFileSync(path, withActive(readFileSync(path, "utf8"), name));
 }

@@ -55,6 +55,15 @@ Qwen3-TTS on Alibaba Cloud (`qwen-cloud`) if the local service is down or too sl
 - Cloud fallback: set `DASHSCOPE_API_KEY` (Alibaba Cloud Model Studio, international region by default).
 - Preset speakers: `npm run voices -- qwen-local`. English natives are Aiden and Ryan; others speak English with an accent.
 
+### Cloned voices and `/voice`
+- `npm run clone-voice -- <name> <clips or folder>` converts voice clips (mp4/m4a/mp3/wav/...), transcribes them with
+  Deepgram and saves the longest clean stretch (≤15s) as `services/qwen-tts/voices/<name>.wav` + `.txt`. The service
+  speaks it with the Qwen3-TTS **Base** model (loaded next to CustomVoice, ~2 GB more VRAM; `QWEN_TTS_CLONE_MODEL=off`
+  disables it) and picks up new voices without a restart. Then add a `qwen-local` profile with `voiceId: <name>`.
+- `/voice` in Discord lists the profiles; `/voice name:<profile>` switches live, says a line in the new voice and saves
+  the choice as `active` in `config/voices.yaml`.
+- Cloned voices run ~1.3x realtime on an RTX 3060 (presets ~1.7x), because the reference clip is in every prompt.
+
 ## Claude Code agents (ACP)
 The voice model can hand work to Claude Code through the [Agent Client Protocol](https://agentclientprotocol.com)
 (`@agentclientprotocol/claude-agent-acp`). It uses your existing Claude Code login.

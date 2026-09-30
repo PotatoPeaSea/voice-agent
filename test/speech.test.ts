@@ -34,3 +34,11 @@ profiles:
     expect(cfg.profiles[cfg.active]).toBeDefined();
   });
 });
+
+describe("switching the active voice", () => {
+  it("rewrites only the active line", async () => {
+    const { withActive } = await import("../src/speech/voices.js");
+    const yaml = "# keep me\nactive: a # comment\nprofiles:\n  a: { provider: p, voiceId: v }\n  b: { provider: p, voiceId: w }\n";
+    expect(withActive(yaml, "b")).toBe("# keep me\nactive: b\nprofiles:\n  a: { provider: p, voiceId: v }\n  b: { provider: p, voiceId: w }\n");
+  });
+});

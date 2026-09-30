@@ -1,4 +1,5 @@
 import { ChannelType, SlashCommandBuilder } from "discord.js";
+import { VOICE_COMMAND } from "./voice-command.js";
 
 /** Guild slash commands (registered on startup; guild commands update instantly). */
 export const COMMANDS = [
@@ -10,4 +11,5 @@ export const COMMANDS = [
     ),
   new SlashCommandBuilder().setName("leave").setDescription("Leave the voice channel (the bot stays online and tasks keep running)"),
   new SlashCommandBuilder().setName("newchat").setDescription("Start a fresh conversation with the bot (tasks keep running)"),
-].map((c) => c.toJSON());
+].map((c) => c.toJSON())
+  .concat(VOICE_COMMAND);

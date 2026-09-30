@@ -22,6 +22,7 @@ import { describeEvent } from "./tasks/notices.js";
 import { makeWorkers } from "./workers/index.js";
 import { TaskReporter } from "./bot/reports.js";
 import { COMMANDS } from "./bot/commands.js";
+import { voiceAutocomplete, voiceCommand, type VoiceCommandDeps } from "./bot/voice-command.js";
 
 const env = loadEnv();
 const log = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 23), ...args);
@@ -230,7 +231,27 @@ client.on(Events.VoiceStateUpdate, (before, after) => {
   }
 });
 
+const voiceDeps: VoiceCommandDeps = {
+  voices,
+  env,
+  log,
+  preview: (text) => {
+    const speaker = call?.speaker;
+    if (!speaker || speaker.isSpeaking) return;
+    async function* line() {
+      yield text;
+    }
+    speaker.play(speak(voices, env, line(), new AbortController().signal, log)).catch(() => {});
+  },
+};
+
 client.on(Events.InteractionCreate, (interaction) => {
+  if (interaction.isAutocomplete()) {
+    if (interaction.commandName === "voice" && isAllowed(interaction.user.id)) {
+      voiceAutocomplete(interaction, voiceDeps).catch((err: Error) => log(`/voice autocomplete failed: ${err.message}`));
+    }
+    return;
+  }
   if (!interaction.isChatInputCommand()) return;
   onCommand(interaction).catch((err: Error) => {
     log(`/${interaction.commandName} failed: ${err.message}`);
@@ -270,6 +291,9 @@ async function onCommand(interaction: ChatInputCommandInteraction): Promise<void
           : "Left the call. Tasks keep running; use /join to bring me back.",
         flags: MessageFlags.Ephemeral,
       });
+      break;
+    case "voice":
+      await voiceCommand(interaction, voiceDeps);
       break;
     case "newchat": {
       const session = call?.sessions.get(interaction.user.id);

@@ -9,3 +9,4 @@ __pycache__/
 qwen-tts.log
 bot.log
 services/qwen-tts/voices/
+Voice sample/
