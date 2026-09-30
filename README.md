@@ -49,7 +49,8 @@ Qwen3-TTS on Alibaba Cloud (`qwen-cloud`) if the local service is down or too sl
 
 - Local service: Python 3.12 + [uv](https://docs.astral.sh/uv/) + an NVIDIA GPU. First run downloads the model (~2 GB for 0.6B).
   ```
-  npm run tts        # starts services/qwen-tts on http://127.0.0.1:8765
+  start-tts.cmd      # (./start-tts.sh on Linux) restarts services/qwen-tts on http://127.0.0.1:8765, logs to qwen-tts.log
+  npm run tts        # same, without stopping an old instance or writing the log file
   ```
   Use `QWEN_TTS_MODEL=Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice` for higher quality and `instruct` (tone) support.
 - Cloud fallback: set `DASHSCOPE_API_KEY` (Alibaba Cloud Model Studio, international region by default).

@@ -19,6 +19,7 @@ Env:  QWEN_TTS_MODEL       (default Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice)
       QWEN_TTS_VOICES_DIR  cloned voice references (default ./voices)
       QWEN_TTS_CHUNK       codec frames per streamed chunk; 12 frames = 1s audio (default 4)
       QWEN_TTS_HOST / QWEN_TTS_PORT (default 127.0.0.1:8765)
+      QWEN_TTS_LOG         also append the log to this file (start-tts sets ../../qwen-tts.log)
 """
 
 import asyncio
@@ -45,7 +46,12 @@ HOST = os.environ.get("QWEN_TTS_HOST", "127.0.0.1")
 PORT = int(os.environ.get("QWEN_TTS_PORT", "8765"))
 SAMPLE_RATE = 24_000  # Qwen3-TTS 12Hz codec output rate
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+LOG_FILE = os.environ.get("QWEN_TTS_LOG")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    handlers=[logging.StreamHandler(), *([logging.FileHandler(LOG_FILE, encoding="utf-8")] if LOG_FILE else [])],
+)
 log = logging.getLogger("qwen-tts")
 
 if not torch.cuda.is_available():
