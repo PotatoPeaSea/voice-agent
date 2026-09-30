@@ -2,12 +2,14 @@ import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { ChatMessage, ChatModel } from "../llm/chat.js";
 import { activeSystemPrompt } from "./prompt.js";
 import type { ToolContext } from "./tools.js";
+import { errorMessage } from "./toolset.js";
 
 const MAX_TOOL_ROUNDS = 5;
 
 export interface TurnTools {
   definitions: ChatCompletionTool[];
-  execute(name: string, args: string, ctx: ToolContext): Promise<unknown>;
+  /** A result or a promise of one. */
+  execute(name: string, args: string, ctx: ToolContext): unknown;
 }
 
 export interface TurnOptions {
@@ -20,6 +22,9 @@ export interface TurnOptions {
   log: (...a: unknown[]) => void;
   /** Receives the final text answer (after all tool rounds). */
   onFinal: (text: string) => void;
+  /** System prompt; defaults to the active voice prompt (re-read every round). */
+  system?: string;
+  maxRounds?: number;
 }
 
 /**
@@ -29,10 +34,10 @@ export interface TurnOptions {
  */
 export async function* assistantTurn(opts: TurnOptions): AsyncIterable<string> {
   const { chat, history, tools, ctx, signal, log } = opts;
-  for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
+  for (let round = 0; round < (opts.maxRounds ?? MAX_TOOL_ROUNDS); round++) {
     let text = "";
     let calls: { id: string; name: string; arguments: string }[] = [];
-    const messages: ChatMessage[] = [{ role: "system", content: activeSystemPrompt() }, ...history];
+    const messages: ChatMessage[] = [{ role: "system", content: opts.system ?? activeSystemPrompt() }, ...history];
     for await (const event of chat.streamWithTools(messages, tools?.definitions ?? [], signal)) {
       if (event.type === "text") {
         text += event.text;
@@ -51,13 +56,22 @@ export async function* assistantTurn(opts: TurnOptions): AsyncIterable<string> {
       content: text || null,
       tool_calls: calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: c.arguments } })),
     });
-    for (const call of calls) {
-      log(`tool ${call.name}(${call.arguments})`);
-      const result = await tools!.execute(call.name, call.arguments, ctx);
-      const content = JSON.stringify(result);
-      log(`  -> ${content.slice(0, 300)}`);
-      history.push({ role: "tool", tool_call_id: call.id, content });
-    }
+    // Calls in one round can't depend on each other's results, so run them together.
+    const results = await Promise.all(
+      calls.map(async (call) => {
+        log(`tool ${call.name}(${call.arguments})`);
+        let result: unknown;
+        try {
+          result = await tools!.execute(call.name, call.arguments, ctx);
+        } catch (err) {
+          result = { error: errorMessage(err) };
+        }
+        const content = JSON.stringify(result ?? null);
+        log(`  ${call.name} -> ${content.slice(0, 300)}`);
+        return content;
+      }),
+    );
+    calls.forEach((call, i) => history.push({ role: "tool", tool_call_id: call.id, content: results[i]! }));
     if (text && !/[.!?]\s*$/.test(text)) yield ". "; // close any spoken preamble before the next round
     if (signal.aborted) return;
   }

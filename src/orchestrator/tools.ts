@@ -12,11 +12,16 @@ import {
   SYSTEM_PROMPT_DESCRIPTIONS,
   SYSTEM_PROMPT_NAMES,
 } from "./prompt.js";
+import { toolName } from "./toolset.js";
 
 /** Context from the current voice turn, passed to every tool call. */
 export interface ToolContext {
   /** The user's latest utterance, verbatim. */
   userTranscript: string;
+  /** Tell the user something later (queued like a task update); lets slow lookups finish in the background. */
+  notify?: (text: string) => void;
+  /** Aborted when the tool call should give up (a background lookup timing out). */
+  signal?: AbortSignal;
 }
 
 const settingProps = {
@@ -168,6 +173,8 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
   },
 ];
 
+const TOOL_NAMES = new Set(TOOL_DEFINITIONS.map(toolName));
+
 /** Executes the front model's tool calls against the task registry and workers. */
 export class TaskTools {
   private readonly workers: Map<string, WorkerAdapter>;
@@ -191,6 +198,10 @@ export class TaskTools {
       const { worker: _, ...properties } = params.properties;
       return { ...tool, function: { ...tool.function, parameters: { ...params, properties } } };
     });
+  }
+
+  handles(name: string): boolean {
+    return TOOL_NAMES.has(name);
   }
 
   /** A worker by name; with no name, Claude Code (or the only worker configured). */

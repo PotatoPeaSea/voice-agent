@@ -10,6 +10,7 @@ Full design: see the plan (architecture, latency budget, milestones). Backlog: [
 - [x] **Milestone 0: live voice receive/playback under DAVE E2EE** — `npm run spike` (verified 2026-09-24)
 - [ ] **Milestone 1: voice conversation** (STT → LLM → TTS with barge-in) — built, awaiting API keys + live test
 - [x] **Claude Code agents over ACP**: dispatch, follow-ups, model/effort/mode/fast settings, permission requests by voice, cancel, spoken reports — verified end to end with `npm run chat`
+- [x] **Lookups without an agent**: direct file/git/web (MCP) tools, a background `quick_agent`, slow lookups reported as automatic updates — verified live against DeepSeek + Exa
 - [ ] Hermes worker · Discord text reports · hardening + Linux (see docs/IMPROVEMENTS.md)
 
 ## Setup
@@ -70,6 +71,28 @@ Qwen3-TTS on Alibaba Cloud (`qwen-cloud`) if the local service is down or too sl
 - `/prompt` lists them; `/prompt name:<prompt>` switches for everyone from the next reply. Saying "be chattier" /
   "back to normal" works too (the `switch_system_prompt` tool). It resets to `default` on restart.
 
+## Looking things up without an agent
+Questions that only need reading don't go to an agent. The voice model has three tiers, picked per request:
+
+1. **Direct lookups**, answered within the turn with no read-back: `list_files`, `read_file`, `search_files`,
+   `git_info` and `current_time` over the `WORKER_ROOTS` folders, plus tools from MCP servers (web search out of
+   the box). "What's the weather in Tokyo?", "What was the last commit in the voice agent project?"
+2. **`quick_agent`**, for questions that need several lookups: a short tool loop with the same LLM and the same
+   read-only tools, run inside the bot. "Research Proxmox vs TrueNAS for a home server." It always runs in the
+   background: the bot says it'll get back to you and speaks the answer when it's ready (typically 5-20 s).
+3. **`dispatch_task`** (below), only for work that changes things or runs long.
+
+A lookup still running after `TOOL_WAIT_SECONDS` (default 3) carries on in the background the same way, and hold
+music can play while you wait. File lookups can't leave `WORKER_ROOTS` (symlinks included) and won't open
+credential files (`.env`, keys, `auth.json`...), because file contents are sent to the LLM provider.
+
+### MCP servers
+`config/mcp.yaml` lists MCP servers whose tools the voice model calls directly, as `<server>__<tool>`. It ships with
+Exa's free, keyless web search (`web_search_exa`, `web_fetch_exa`). Add local servers (`command`) or remote ones
+(`url`), and list only the tools you want: every tool costs prompt space on every turn, and these run without the
+agents' permission prompts. Tools a server doesn't mark read-only are described to the model as "Takes action:
+confirm with the user first". `${VAR}` in the file is filled from `.env`. The startup log shows each server's tools.
+
 ## Claude Code agents (ACP)
 The voice model can hand work to Claude Code through the [Agent Client Protocol](https://agentclientprotocol.com)
 (`@agentclientprotocol/claude-agent-acp`). It uses your existing Claude Code login.
@@ -94,7 +117,7 @@ Task logs and reports are written to `data/tasks/`.
 
 ### Hold music while agents work
 Put audio files (mp3, wav, ogg, flac, m4a...) in `music/` (or point `MUSIC_PATH` at a file or folder). After a task
-is dispatched and the call has been quiet for `MUSIC_DELAY_SECONDS` (default 5), the bot plays them shuffled at
+is dispatched (or a lookup goes to the background) and the call has been quiet for `MUSIC_DELAY_SECONDS` (default 5), the bot plays them shuffled at
 `MUSIC_VOLUME` (default 0.2). The music stops the moment anyone speaks, a task reports back or asks permission, or no
 task is running any more, and never plays over the bot's own speech. `MUSIC_ENABLED=false` turns it off; without
 files or ffmpeg there's simply no music.

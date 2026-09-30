@@ -45,8 +45,8 @@ type Input = { kind: "user"; text: string } | { kind: "notice"; text: string };
 
 /**
  * One user's conversation: streaming STT -> LLM (with tool calls) -> sentence
- * chunks -> TTS -> Discord, with barge-in. Background task updates are queued
- * and spoken when the conversation is idle.
+ * chunks -> TTS -> Discord, with barge-in. Background task updates and slow
+ * lookups' results are queued and spoken when the conversation is idle.
  */
 export class VoiceSession {
   private readonly history: ChatMessage[];
@@ -218,7 +218,7 @@ export class VoiceSession {
       return;
     }
     const history = this.history;
-    const ctx: ToolContext = { userTranscript: this.lastUserText };
+    const ctx: ToolContext = { userTranscript: this.lastUserText, notify: (text) => this.notify(text) };
 
     const t0 = Date.now();
     const marks: Record<string, number> = {};

@@ -66,6 +66,14 @@ const EnvSchema = z.object({
 
   /** Folders Claude Code tasks may run in (comma-separated). Defaults to the folder containing this project. */
   WORKER_ROOTS: z.string().optional(),
+
+  /**
+   * Seconds the voice model waits for a lookup (file, git or MCP tool) before moving on; slower ones
+   * finish in the background and are reported as an automatic update (quick_agent always does).
+   */
+  TOOL_WAIT_SECONDS: numberWithDefault(3, 0, 60),
+  /** MCP servers whose tools the voice model calls directly. A missing file means none. */
+  MCP_CONFIG: withDefault("config/mcp.yaml"),
   /**
    * Fallback Claude Code settings for new tasks when neither the user nor the front model picks one.
    * (The front model normally chooses per task; see the system prompt.)

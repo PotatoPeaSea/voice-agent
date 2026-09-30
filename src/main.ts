@@ -1,8 +1,9 @@
 /**
  * Entry point: live voice conversation in a Discord voice channel.
  * STT (Deepgram Flux) -> LLM (OpenAI-compatible, with tools) -> TTS (voice profile) with barge-in.
- * The LLM can dispatch Claude Code and Hermes agents (via ACP) that work in the background;
- * their progress and full reports are mirrored to Discord text.
+ * The LLM looks things up itself (files, git, MCP tools such as web search, or a quick
+ * in-process research agent) and dispatches Claude Code and Hermes agents (via ACP) for
+ * real work in the background; their progress and full reports are mirrored to Discord text.
  *
  * The bot follows allowed users into voice (VOICE_AUTO_JOIN) and can be moved with
  * /join, /leave and /newchat; leaving the call keeps it online and tasks running.
@@ -18,7 +19,7 @@ import { makeStt, resolveVoice, speak } from "./speech/index.js";
 import { loadVoices } from "./speech/voices.js";
 import { dirname, resolve } from "node:path";
 import { VoiceSession } from "./orchestrator/session.js";
-import { TaskTools, type ToolContext } from "./orchestrator/tools.js";
+import { makeToolbox } from "./orchestrator/toolbox.js";
 import {
   activeSystemPromptName,
   isSystemPromptName,
@@ -51,16 +52,20 @@ const histories = new Map<string, ChatMessage[]>();
 const roots = (env.WORKER_ROOTS?.split(",") ?? [dirname(process.cwd())]).map((r) => resolve(r.trim())).filter(Boolean);
 const registry = new TaskRegistry();
 const workers = makeWorkers(env, registry, log);
-const taskTools = new TaskTools(registry, workers, roots);
 /** Songs for play_music, and (with MUSIC_ENABLED) hold music, from the same folder. */
 const library = new MusicLibrary(env.MUSIC_PATH, env.MUSIC_VOLUME, log);
 const music = env.MUSIC_ENABLED ? library : undefined;
 const musicTools = new MusicTools({ library, jukebox: () => call?.jukebox });
-const tools = {
-  definitions: [...taskTools.definitions, ...musicTools.definitions],
-  execute: async (name: string, args: string, ctx: ToolContext) =>
-    musicTools.handles(name) ? musicTools.execute(name, args) : taskTools.execute(name, args, ctx),
-};
+const { tools, jobs, mcp } = makeToolbox({
+  env,
+  chat,
+  registry,
+  workers,
+  roots,
+  music: musicTools,
+  log,
+  onJobFinish: () => call?.holdMusic?.interrupt(),
+});
 
 /** The current call: one connection and speaker, one VoiceSession per allowed user who has spoken. */
 interface Call {
@@ -184,7 +189,8 @@ function join(channelId: string): Promise<void> {
     if (music) {
       current.holdMusic = new HoldMusic({
         speaker,
-        waiting: () => !jukebox.current && registry.list().some(isWorking), // a requested song beats hold music
+        // A requested song beats hold music.
+        waiting: () => !jukebox.current && (registry.list().some(isWorking) || jobs.active > 0),
         quiet,
         source: (signal) => (music.tracks().length ? music.play(signal) : undefined),
         delayMs: env.MUSIC_DELAY_SECONDS * 1000,
@@ -394,7 +400,7 @@ async function shutdown(): Promise<void> {
   shuttingDown = true;
   registry.save();
   for (const worker of workers) worker.shutdown();
-  await leaveNow("shutting down");
+  await Promise.all([leaveNow("shutting down"), mcp.close()]);
   await new Promise((r) => setTimeout(r, 500)); // let the leave go out before the gateway closes
   await client.destroy();
   process.exit(0);

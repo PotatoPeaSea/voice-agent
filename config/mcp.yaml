@@ -1,0 +1,32 @@
+# MCP servers whose tools the voice model calls directly: no agent, no read-back, answered
+# within the turn (or in the background if slower than TOOL_WAIT_SECONDS).
+#
+# Each tool is offered as "<server>__<tool>". List only the tools you want: small models pick
+# worse from long lists, every tool's description is sent on every turn, and these run without
+# the agents' permission prompts. Tools the server doesn't mark read-only are described to the
+# model as "Takes action: confirm with the user first".
+#
+# Per server: either `command` (+ `args`, `env`, `cwd`) for a local server on stdio, or `url`
+# (+ `headers`) for a remote one over streamable HTTP. `${VAR}` is replaced from .env, so keys
+# stay out of this file. `enabled: false` skips a server. The bot's own .env is NOT passed to
+# local servers; give each one what it needs under `env`.
+
+servers:
+  # Web search and page reading. Exa's free, keyless endpoint (the same one Hermes falls back to).
+  exa:
+    url: https://mcp.exa.ai/mcp
+    tools: [web_search_exa, web_fetch_exa]
+
+  # Time zones and conversions (needs uv).
+  # time:
+  #   command: uvx
+  #   args: [mcp-server-time]
+  #   tools: [get_current_time, convert_time]
+
+  # A remote server that wants a token, e.g. one on potato server reached through an SSH tunnel
+  # (ssh -L 8910:127.0.0.1:8910 potatoserver). Check its actual path and auth scheme.
+  # instagram:
+  #   url: http://127.0.0.1:8910/mcp
+  #   headers:
+  #     Authorization: Bearer ${INSTAGRAM_MCP_TOKEN}
+  #   tools: [...]  # the names you want; a wrong name logs the tools the server does have
