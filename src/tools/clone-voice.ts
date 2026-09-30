@@ -6,11 +6,14 @@
  * stretch of continuous speech (up to 15s) and writes services/qwen-tts/voices/<name>.wav
  * plus its transcript. The service picks it up without a restart; add a profile to
  * config/voices.yaml to switch to it (`/voice` in Discord).
+ *
+ * `<voice>/<part>` names add one of several references to a voice folder; the service
+ * picks one at random per sentence, so the delivery varies between them.
  */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, join, resolve } from "node:path";
 import { loadEnv } from "../config.js";
 
 const MAX_SECONDS = 15; // longer references slow every sentence down (they're in the prompt)
@@ -33,8 +36,8 @@ interface Window {
 }
 
 const [name, ...inputs] = process.argv.slice(2);
-if (!name || !inputs.length || !/^[a-z0-9_-]+$/i.test(name)) {
-  console.error("usage: npm run clone-voice -- <name (letters, digits, - or _)> <audio file or folder>...");
+if (!name || !inputs.length || !/^[a-z0-9_-]+(\/[a-z0-9_-]+)?$/i.test(name)) {
+  console.error("usage: npm run clone-voice -- <name or voice/part (letters, digits, - or _)> <audio file or folder>...");
   process.exit(1);
 }
 
@@ -96,8 +99,8 @@ try {
     throw new Error(`need at least ${MIN_SECONDS}s of continuous speech; add longer or cleaner clips`);
   }
 
-  mkdirSync(OUT_DIR, { recursive: true });
   const out = join(OUT_DIR, `${name.toLowerCase()}.wav`);
+  mkdirSync(dirname(out), { recursive: true });
   const start = Math.max(0, best.start - 0.1);
   ffmpeg("-i", best.file, "-ss", start.toFixed(2), "-to", (best.end + 0.25).toFixed(2), out);
   writeFileSync(out.replace(/\.wav$/, ".txt"), best.text + "\n");
@@ -105,7 +108,8 @@ try {
   console.log(`\nwrote ${out} (${(best.end - best.start).toFixed(1)}s from ${basename(best.file)})`);
   console.log(`transcript: ${best.text}`);
   console.log(`\nAdd to config/voices.yaml under profiles, then pick it with /voice in Discord:\n`);
-  console.log(`  ${name.toLowerCase()}:\n    provider: qwen-local\n    voiceId: ${name.toLowerCase()}\n    language: English`);
+  const voice = name.toLowerCase().split("/")[0];
+  console.log(`  ${voice}:\n    provider: qwen-local\n    voiceId: ${voice}\n    language: English`);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

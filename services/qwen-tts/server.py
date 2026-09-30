@@ -4,14 +4,16 @@ Local Qwen3-TTS service for the voice agent.
 Uses faster-qwen3-tts (CUDA graphs) so generation runs faster than real time
 and streams audio while a sentence is still being generated.
 
-POST /synthesize {text, speaker, language?, instruct?} -> streamed raw PCM
+POST /synthesize {text, speaker, language?, instruct?, temperature?} -> streamed raw PCM
 (s16le, mono); sample rate in the X-Sample-Rate header. One request per
 sentence; the Node side streams sentences in as the LLM writes them.
 
 Speakers are the model's presets plus cloned voices: each voices/<name>.wav
 (a clean ~10-15s clip) with voices/<name>.txt (its exact transcript) becomes
-speaker <name>, spoken by the Base model. Make them with `npm run clone-voice`.
-New files are picked up without a restart.
+speaker <name>, spoken by the Base model. A folder voices/<name>/ holding several
+wav+txt pairs is one voice whose reference is picked at random per sentence, so the
+delivery varies between them. Make them with `npm run clone-voice`. New files are
+picked up without a restart.
 
 Run:  uv run server.py        (from services/qwen-tts)
 Env:  QWEN_TTS_MODEL       (default Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice)
@@ -25,6 +27,7 @@ Env:  QWEN_TTS_MODEL       (default Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice)
 import asyncio
 import logging
 import os
+import random
 import threading
 import time
 from collections.abc import AsyncIterator, Callable
@@ -36,7 +39,7 @@ import uvicorn
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from faster_qwen3_tts import FasterQwen3TTS
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 MODEL_ID = os.environ.get("QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice")
 CLONE_MODEL_ID = os.environ.get("QWEN_TTS_CLONE_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-Base")
@@ -74,17 +77,32 @@ class SynthesizeRequest(BaseModel):
     speaker: str
     language: str | None = None
     instruct: str | None = None
+    # Sampling temperature (model default 0.9). Higher = livelier, more varied delivery; past ~1.2 it gets unstable.
+    temperature: float | None = Field(None, gt=0, le=2)
+    # A cloned voice with several references: use this one (file stem) instead of a random pick.
+    reference: str | None = None
 
 
-def cloned_voices() -> dict[str, tuple[Path, str]]:
-    """name -> (reference wav, transcript) for every complete pair in VOICES_DIR."""
+Reference = tuple[Path, str]  # clip, its transcript
+
+
+def references(folder: Path) -> list[Reference]:
+    """Every wav with a matching txt transcript in folder."""
+    return [
+        (wav, wav.with_suffix(".txt").read_text(encoding="utf-8").strip())
+        for wav in sorted(folder.glob("*.wav"))
+        if wav.with_suffix(".txt").is_file()
+    ]
+
+
+def cloned_voices() -> dict[str, list[Reference]]:
+    """name -> its references: voices/<name>.wav is one, voices/<name>/ holds several."""
     if clone_model is None or not VOICES_DIR.is_dir():
         return {}
-    voices = {}
-    for wav in VOICES_DIR.glob("*.wav"):
-        txt = wav.with_suffix(".txt")
-        if txt.is_file():
-            voices[wav.stem.lower()] = (wav, txt.read_text(encoding="utf-8").strip())
+    voices = {wav.stem.lower(): [(wav, text)] for wav, text in references(VOICES_DIR)}
+    for folder in VOICES_DIR.iterdir():
+        if folder.is_dir() and (refs := references(folder)):
+            voices[folder.name.lower()] = refs
     return voices
 
 
@@ -99,25 +117,30 @@ def max_tokens(text: str) -> int:
 
 
 def generate(req: SynthesizeRequest):
-    clone = cloned_voices().get(req.speaker.lower())
-    if clone:
-        ref_audio, ref_text = clone
+    """Returns (label for the log, generator)."""
+    refs = cloned_voices().get(req.speaker.lower())
+    if refs:
+        chosen = [r for r in refs if r[0].stem.lower() == (req.reference or "").lower()]
+        ref_audio, ref_text = chosen[0] if chosen else random.choice(refs)
+        label = f"{req.speaker}/{ref_audio.stem}" if len(refs) > 1 else req.speaker
         # The Base model takes no instruct; the reference clip sets the style.
-        return clone_model.generate_voice_clone_streaming(
+        return label, clone_model.generate_voice_clone_streaming(
             text=req.text,
             language=req.language or "Auto",
             ref_audio=ref_audio,
             ref_text=ref_text,
             chunk_size=CHUNK_FRAMES,
             max_new_tokens=max_tokens(req.text),
+            temperature=req.temperature or 0.9,
         )
-    return model.generate_custom_voice_streaming(
+    return req.speaker, model.generate_custom_voice_streaming(
         text=req.text,
         speaker=req.speaker,
         language=req.language or "Auto",
         instruct=req.instruct,
         chunk_size=CHUNK_FRAMES,
         max_new_tokens=max_tokens(req.text),
+        temperature=req.temperature or 0.9,
     )
 
 
@@ -133,7 +156,7 @@ def run_generation(req: SynthesizeRequest, emit: Callable[[bytes], None], cancel
     samples = 0
     stopped = False
     with gpu_lock:
-        gen = generate(req)
+        label, gen = generate(req)
         try:
             for chunk, _sr, _timing in gen:
                 if cancelled():
@@ -149,7 +172,7 @@ def run_generation(req: SynthesizeRequest, emit: Callable[[bytes], None], cancel
     audio_s = samples / SAMPLE_RATE
     log.info(
         "[%s] %sfirst audio %.0fms, %.2fs audio in %.2fs (%.1fx realtime): %r",
-        req.speaker, "CANCELLED " if stopped else "", (first_audio or 0) * 1000, audio_s, elapsed,
+        label, "CANCELLED " if stopped else "", (first_audio or 0) * 1000, audio_s, elapsed,
         audio_s / max(elapsed, 1e-6), req.text[:60],
     )
 
@@ -213,11 +236,13 @@ if __name__ == "__main__":
     log.info("speakers: %s", ", ".join(all_speakers()))
     t0 = time.perf_counter()
     model.warmup()  # captures CUDA graphs
-    warm = [SPEAKERS[0]]
+    warm: list[tuple[str, str | None]] = [(SPEAKERS[0], None)]
     if clone_model is not None:
         clone_model.warmup()
-        warm += sorted(cloned_voices())  # also caches each reference's voice prompt
-    for speaker in warm:
-        run_generation(SynthesizeRequest(text="Warming up the voice.", speaker=speaker, language="English"), lambda _: None, lambda: False)
+        # Also caches every reference's voice prompt, so no sentence pays for it later.
+        warm += [(name, wav.stem) for name, refs in sorted(cloned_voices().items()) for wav, _ in refs]
+    for speaker, reference in warm:
+        req = SynthesizeRequest(text="Warming up the voice.", speaker=speaker, language="English", reference=reference)
+        run_generation(req, lambda _: None, lambda: False)
     log.info("warm-up done in %.2fs", time.perf_counter() - t0)
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")

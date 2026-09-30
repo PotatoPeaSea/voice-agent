@@ -15,6 +15,7 @@ class QwenLocalTts implements TtsProvider {
   synthesize(text: AsyncIterable<string>, voice: VoiceProfile, signal: AbortSignal): AsyncIterable<Buffer> {
     const queue = new AsyncQueue<Buffer>();
     const instruct = voice.providerOptions?.instruct as string | undefined;
+    const temperature = voice.providerOptions?.temperature as number | undefined;
 
     (async () => {
       for await (const sentence of text) {
@@ -22,7 +23,7 @@ class QwenLocalTts implements TtsProvider {
         const res = await fetch(`${this.baseUrl}/synthesize`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: sentence, speaker: voice.voiceId, language: voice.language, instruct }),
+          body: JSON.stringify({ text: sentence, speaker: voice.voiceId, language: voice.language, instruct, temperature }),
           signal,
         });
         if (!res.ok || !res.body) throw new Error(`qwen-local HTTP ${res.status}: ${await res.text()}`);

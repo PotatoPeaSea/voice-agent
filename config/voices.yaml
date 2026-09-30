@@ -2,7 +2,7 @@
 # List voice IDs:  npm run voices -- qwen-local | qwen-cloud | cartesia | elevenlabs
 # `providerOptions` is passed straight to the provider for vendor-specific settings.
 # `fallback` names another profile used automatically if this one fails.
-active: qwen
+active: clone-short
 
 profiles:
   # Qwen3-TTS on the local GPU (services/qwen-tts). Preset English speakers: Aiden, Ryan.
@@ -19,6 +19,26 @@ profiles:
     voiceId: clone
     language: English
     fallback: qwen
+
+  # Blend: the mall + noodles clips joined into one 27s reference, so every sentence mixes
+  # both deliveries (services/qwen-tts/voices/clone-blend.{wav,txt}). ~0.8-0.9x realtime.
+  clone-blend:
+    provider: qwen-local
+    voiceId: clone-blend
+    language: English
+    fallback: qwen
+    providerOptions:
+      temperature: 1.1
+
+  # Short blend: first ~7s of the mall clip + first ~7s of the noodles clip (14.8s total),
+  # so it stays realtime (~1.0-1.3x) (services/qwen-tts/voices/clone-short.{wav,txt}).
+  clone-short:
+    provider: qwen-local
+    voiceId: clone-short
+    language: English
+    fallback: qwen
+    providerOptions:
+      temperature: 1.1
 
   # Qwen3-TTS on Alibaba Cloud (DashScope). Used when the local service is down.
   qwen-cloud:
