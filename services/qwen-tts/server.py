@@ -8,8 +8,15 @@ POST /synthesize {text, speaker, language?, instruct?} -> streamed raw PCM
 (s16le, mono); sample rate in the X-Sample-Rate header. One request per
 sentence; the Node side streams sentences in as the LLM writes them.
 
+Speakers are the model's presets plus cloned voices: each voices/<name>.wav
+(a clean ~10-15s clip) with voices/<name>.txt (its exact transcript) becomes
+speaker <name>, spoken by the Base model. Make them with `npm run clone-voice`.
+New files are picked up without a restart.
+
 Run:  uv run server.py        (from services/qwen-tts)
 Env:  QWEN_TTS_MODEL       (default Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice)
+      QWEN_TTS_CLONE_MODEL Base model for cloned voices (default Qwen/Qwen3-TTS-12Hz-0.6B-Base; "off" disables)
+      QWEN_TTS_VOICES_DIR  cloned voice references (default ./voices)
       QWEN_TTS_CHUNK       codec frames per streamed chunk; 12 frames = 1s audio (default 4)
       QWEN_TTS_HOST / QWEN_TTS_PORT (default 127.0.0.1:8765)
 """
@@ -19,6 +26,7 @@ import os
 import threading
 import time
 from collections.abc import Iterator
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -29,6 +37,8 @@ from faster_qwen3_tts import FasterQwen3TTS
 from pydantic import BaseModel
 
 MODEL_ID = os.environ.get("QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice")
+CLONE_MODEL_ID = os.environ.get("QWEN_TTS_CLONE_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-Base")
+VOICES_DIR = Path(os.environ.get("QWEN_TTS_VOICES_DIR", Path(__file__).parent / "voices"))
 CHUNK_FRAMES = int(os.environ.get("QWEN_TTS_CHUNK", "4"))
 HOST = os.environ.get("QWEN_TTS_HOST", "127.0.0.1")
 PORT = int(os.environ.get("QWEN_TTS_PORT", "8765"))
@@ -43,6 +53,10 @@ if not torch.cuda.is_available():
 log.info("loading %s", MODEL_ID)
 model = FasterQwen3TTS.from_pretrained(MODEL_ID)
 SPEAKERS: list[str] = model.model.get_supported_speakers() or []
+clone_model = None
+if CLONE_MODEL_ID.lower() != "off":
+    log.info("loading %s for cloned voices", CLONE_MODEL_ID)
+    clone_model = FasterQwen3TTS.from_pretrained(CLONE_MODEL_ID)
 gpu_lock = threading.Lock()  # one generation at a time; requests queue in order
 app = FastAPI(title="qwen-tts")
 
@@ -54,6 +68,43 @@ class SynthesizeRequest(BaseModel):
     instruct: str | None = None
 
 
+def cloned_voices() -> dict[str, tuple[Path, str]]:
+    """name -> (reference wav, transcript) for every complete pair in VOICES_DIR."""
+    if clone_model is None or not VOICES_DIR.is_dir():
+        return {}
+    voices = {}
+    for wav in VOICES_DIR.glob("*.wav"):
+        txt = wav.with_suffix(".txt")
+        if txt.is_file():
+            voices[wav.stem.lower()] = (wav, txt.read_text(encoding="utf-8").strip())
+    return voices
+
+
+def all_speakers() -> list[str]:
+    return SPEAKERS + sorted(set(cloned_voices()) - set(SPEAKERS))
+
+
+def generate(req: SynthesizeRequest):
+    clone = cloned_voices().get(req.speaker.lower())
+    if clone:
+        ref_audio, ref_text = clone
+        # The Base model takes no instruct; the reference clip sets the style.
+        return clone_model.generate_voice_clone_streaming(
+            text=req.text,
+            language=req.language or "Auto",
+            ref_audio=ref_audio,
+            ref_text=ref_text,
+            chunk_size=CHUNK_FRAMES,
+        )
+    return model.generate_custom_voice_streaming(
+        text=req.text,
+        speaker=req.speaker,
+        language=req.language or "Auto",
+        instruct=req.instruct,
+        chunk_size=CHUNK_FRAMES,
+    )
+
+
 def to_pcm16(wav: np.ndarray) -> bytes:
     return (np.clip(wav, -1.0, 1.0) * 32767).astype("<i2").tobytes()
 
@@ -63,13 +114,7 @@ def stream_pcm(req: SynthesizeRequest) -> Iterator[bytes]:
     first_audio = None
     samples = 0
     with gpu_lock:
-        for chunk, _sr, _timing in model.generate_custom_voice_streaming(
-            text=req.text,
-            speaker=req.speaker,
-            language=req.language or "Auto",
-            instruct=req.instruct,
-            chunk_size=CHUNK_FRAMES,
-        ):
+        for chunk, _sr, _timing in generate(req):
             if first_audio is None:
                 first_audio = time.perf_counter() - started
             samples += len(chunk)
@@ -77,26 +122,26 @@ def stream_pcm(req: SynthesizeRequest) -> Iterator[bytes]:
     elapsed = time.perf_counter() - started
     audio_s = samples / SAMPLE_RATE
     log.info(
-        "first audio %.0fms, %.2fs audio in %.2fs (%.1fx realtime): %r",
-        (first_audio or 0) * 1000, audio_s, elapsed, audio_s / max(elapsed, 1e-6), req.text[:60],
+        "[%s] first audio %.0fms, %.2fs audio in %.2fs (%.1fx realtime): %r",
+        req.speaker, (first_audio or 0) * 1000, audio_s, elapsed, audio_s / max(elapsed, 1e-6), req.text[:60],
     )
 
 
 def validate(req: SynthesizeRequest) -> None:
     if not req.text.strip():
         raise HTTPException(400, "text is empty")
-    if req.speaker.lower() not in SPEAKERS:
-        raise HTTPException(400, f"unknown speaker {req.speaker!r}; available: {', '.join(SPEAKERS)}")
+    if req.speaker.lower() not in all_speakers():
+        raise HTTPException(400, f"unknown speaker {req.speaker!r}; available: {', '.join(all_speakers())}")
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "model": MODEL_ID, "speakers": SPEAKERS}
+    return {"ok": True, "model": MODEL_ID, "clone_model": CLONE_MODEL_ID if clone_model else None, "speakers": all_speakers()}
 
 
 @app.get("/speakers")
 def speakers() -> list[str]:
-    return SPEAKERS
+    return all_speakers()
 
 
 @app.post("/synthesize")
@@ -110,10 +155,15 @@ def synthesize(req: SynthesizeRequest) -> StreamingResponse:
 
 
 if __name__ == "__main__":
-    log.info("speakers: %s", ", ".join(SPEAKERS))
+    log.info("speakers: %s", ", ".join(all_speakers()))
     t0 = time.perf_counter()
     model.warmup()  # captures CUDA graphs
-    for _ in stream_pcm(SynthesizeRequest(text="Warming up the voice.", speaker=SPEAKERS[0], language="English")):
-        pass
+    warm = [SPEAKERS[0]]
+    if clone_model is not None:
+        clone_model.warmup()
+        warm += sorted(cloned_voices())  # also caches each reference's voice prompt
+    for speaker in warm:
+        for _ in stream_pcm(SynthesizeRequest(text="Warming up the voice.", speaker=speaker, language="English")):
+            pass
     log.info("warm-up done in %.2fs", time.perf_counter() - t0)
     uvicorn.run(app, host=HOST, port=PORT, log_level="warning")

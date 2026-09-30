@@ -12,6 +12,7 @@
     "tts": "cd services/qwen-tts && uv run server.py",
     "check": "tsx src/tools/check.ts",
     "voices": "tsx src/tools/list-voices.ts",
+    "clone-voice": "tsx src/tools/clone-voice.ts",
     "agent:probe": "tsx src/tools/acp-probe.ts",
     "agent:smoke": "tsx src/tools/agent-smoke.ts",
     "spike": "tsx src/spike/m0-voice.ts",

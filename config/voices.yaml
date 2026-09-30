@@ -1,4 +1,4 @@
-# Named voice profiles. Switch with `active` (later also a /voice slash command or by asking the bot).
+# Named voice profiles. Switch with `active` or the /voice slash command in Discord (it rewrites `active`).
 # List voice IDs:  npm run voices -- qwen-local | qwen-cloud | cartesia | elevenlabs
 # `providerOptions` is passed straight to the provider for vendor-specific settings.
 # `fallback` names another profile used automatically if this one fails.
@@ -11,6 +11,14 @@ profiles:
     voiceId: Aiden          # "Sunny American male voice with clear midrange"
     language: English
     fallback: qwen-cloud
+
+  # Cloned from the clips in "Voice sample/" (npm run clone-voice -- clone "Voice sample").
+  # Reference clip + transcript live in services/qwen-tts/voices/clone.{wav,txt}.
+  clone:
+    provider: qwen-local
+    voiceId: clone
+    language: English
+    fallback: qwen
 
   # Qwen3-TTS on Alibaba Cloud (DashScope). Used when the local service is down.
   qwen-cloud:
