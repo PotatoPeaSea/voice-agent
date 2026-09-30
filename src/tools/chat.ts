@@ -1,7 +1,8 @@
 /**
  * `npm run chat` — talk to the orchestrator by keyboard instead of voice.
  * Same model, prompt, tools and workers (Claude Code, Hermes) as the voice bot; task
- * updates are printed and answered just like they'd be spoken.
+ * updates are printed and answered just like they'd be spoken. Songs can be listed
+ * (list_songs) but only play in voice.
  *
  * Scripted: `npm run chat -- "first message" "second message"` sends each message,
  * waiting for any dispatched tasks to report back before the next one, then exits.
@@ -11,7 +12,9 @@ import readline from "node:readline/promises";
 import { loadEnv } from "../config.js";
 import { ChatModel, type ChatMessage } from "../llm/chat.js";
 import { assistantTurn } from "../orchestrator/turn.js";
-import { TaskTools } from "../orchestrator/tools.js";
+import { TaskTools, type ToolContext } from "../orchestrator/tools.js";
+import { MusicTools } from "../orchestrator/music-tools.js";
+import { MusicLibrary } from "../audio/music.js";
 import { TaskRegistry } from "../tasks/registry.js";
 import { describeEvent } from "../tasks/notices.js";
 import type { TaskEvent } from "../tasks/types.js";
@@ -25,7 +28,12 @@ const roots = (env.WORKER_ROOTS?.split(",") ?? [dirname(process.cwd())]).map((r)
 const registry = new TaskRegistry();
 const workers = makeWorkers(env, registry, log);
 const taskTools = new TaskTools(registry, workers, roots);
-const tools = { definitions: taskTools.definitions, execute: taskTools.execute.bind(taskTools) };
+const musicTools = new MusicTools({ library: new MusicLibrary(env.MUSIC_PATH, env.MUSIC_VOLUME, log), jukebox: () => undefined });
+const tools = {
+  definitions: [...taskTools.definitions, ...musicTools.definitions],
+  execute: async (name: string, args: string, ctx: ToolContext) =>
+    musicTools.handles(name) ? musicTools.execute(name, args) : taskTools.execute(name, args, ctx),
+};
 const chat = new ChatModel(env);
 const history: ChatMessage[] = [];
 const events: TaskEvent[] = [];

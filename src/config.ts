@@ -101,6 +101,8 @@ const EnvSchema = z.object({
   MUSIC_DELAY_SECONDS: numberWithDefault(5, 0, 600),
   /** Music volume, 0-1 (speech plays at full volume). */
   MUSIC_VOLUME: numberWithDefault(0.2, 0, 1),
+  /** Volume of songs the user asks for (play_music), 0-1; they come from MUSIC_PATH even with MUSIC_ENABLED off. */
+  MUSIC_SONG_VOLUME: numberWithDefault(0.5, 0, 1),
 });
 
 export type Env = z.infer<typeof EnvSchema>;

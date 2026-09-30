@@ -6,10 +6,10 @@ const EXTENSIONS = new Set([".mp3", ".wav", ".ogg", ".opus", ".flac", ".m4a", ".
 const FADE_IN_S = 1.5;
 
 /**
- * Hold music from an audio file or a folder of them, decoded with ffmpeg to
- * 48kHz stereo PCM. The folder is rescanned on every play, so tracks can be
- * added while the bot runs. Anything missing (path, files, ffmpeg) just means
- * no music, logged once.
+ * Music from an audio file or a folder of them, decoded with ffmpeg to 48kHz
+ * stereo PCM: shuffled hold music, or one requested song. The folder is
+ * rescanned on every play, so tracks can be added while the bot runs. Anything
+ * missing (path, files, ffmpeg) just means no music, logged once.
  */
 export class MusicLibrary {
   private readonly path: string;
@@ -32,7 +32,7 @@ export class MusicLibrary {
     const found = findAudio(this.path).filter((f) => !this.bad.has(f));
     if (!found.length && !this.warned) {
       this.warned = true;
-      this.log(`hold music off: no audio files at ${this.path}`);
+      this.log(`music off: no audio files at ${this.path}`);
     }
     if (found.length) this.warned = false;
     return found;
@@ -54,9 +54,16 @@ export class MusicLibrary {
     }
   }
 
-  private async *decode(file: string, signal: AbortSignal): AsyncIterable<Buffer> {
-    const args = ["-hide_banner", "-loglevel", "error", "-i", file, "-vn"];
-    args.push("-af", `volume=${this.volume},afade=t=in:d=${FADE_IN_S}`, "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1");
+  /** One track, once, from startAtS seconds in (a requested song, or one resumed after speech). */
+  playTrack(file: string, signal: AbortSignal, opts: { volume?: number; startAtS?: number } = {}): AsyncIterable<Buffer> {
+    return this.decode(file, signal, opts.volume, opts.startAtS);
+  }
+
+  private async *decode(file: string, signal: AbortSignal, volume = this.volume, startAtS = 0): AsyncIterable<Buffer> {
+    const args = ["-hide_banner", "-loglevel", "error"];
+    if (startAtS > 0) args.push("-ss", startAtS.toFixed(2));
+    args.push("-i", file, "-vn");
+    args.push("-af", `volume=${volume},afade=t=in:d=${FADE_IN_S}`, "-f", "s16le", "-ar", "48000", "-ac", "2", "pipe:1");
     const child = spawn(this.ffmpeg, args, { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     child.stderr.on("data", (d: Buffer) => (stderr = (stderr + d.toString()).slice(-500)));
@@ -80,10 +87,11 @@ export class MusicLibrary {
     if (signal.aborted) return;
     if (result instanceof Error) {
       this.ffmpegMissing = true;
-      this.log(`hold music off: couldn't run ffmpeg (${result.message})`);
-    } else if (!bytes) {
+      this.log(`music off: couldn't run ffmpeg (${result.message})`);
+    } else if (!bytes && !startAtS) {
+      // (Nothing after a seek just means it was resumed right at the end.)
       this.bad.add(file);
-      this.log(`hold music: skipping ${file} (${stderr.trim().split("\n").at(-1) || `ffmpeg exited ${result}`})`);
+      this.log(`music: skipping ${file} (${stderr.trim().split("\n").at(-1) || `ffmpeg exited ${result}`})`);
     }
   }
 }

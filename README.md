@@ -99,5 +99,13 @@ is dispatched and the call has been quiet for `MUSIC_DELAY_SECONDS` (default 5),
 task is running any more, and never plays over the bot's own speech. `MUSIC_ENABLED=false` turns it off; without
 files or ffmpeg there's simply no music.
 
+### Playing songs on request
+The same `music/` folder is the song list for three model tools: `list_songs` (list or search by name),
+`play_music` (e.g. "play Moonlight"; partial or misheard names are fuzzy-matched, no name picks one at random) and
+`stop_music`. A requested song starts once the bot finishes its reply, plays at `MUSIC_SONG_VOLUME` (default 0.5),
+pauses whenever the bot speaks and resumes where it was, and ends with the track, `stop_music` or leaving the call.
+Hold music doesn't play while a song is requested. Song titles are the file names, so name files the way you'd say
+them (`moonlight.mp3`, `river_flows_in_you.mp3`).
+
 The tracks in `music/` (`grateful.mp3`, `moonlight.mp3`) were copied from the user's NAS, Potato Server, at the
 SMB share `\\<nas-host>\nas\music`, which holds the full music library and is the source for hold-music tracks.
