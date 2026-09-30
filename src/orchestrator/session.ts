@@ -1,4 +1,5 @@
 import type { VoiceConnection } from "@discordjs/voice";
+import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { ChatMessage, ChatModel } from "../llm/chat.js";
 import type { Speaker } from "../bot/speaker.js";
 import { listenToUser } from "../bot/listener.js";
@@ -14,6 +15,17 @@ const NOTICE_CHECK_MS = 1_000;
 
 export type SessionTools = TurnTools;
 
+/** Handled by the session itself: clears the conversation once the current reply is done. */
+export const NEW_CONVERSATION_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "new_conversation",
+    description:
+      "Start a fresh conversation: forget everything said so far. Use when the user asks to start over, start a new chat or clear the context. Tasks keep running and stay listed.",
+    parameters: { type: "object", properties: {} },
+  },
+};
+
 export interface SessionDeps {
   connection: VoiceConnection;
   userId: string;
@@ -23,6 +35,8 @@ export interface SessionDeps {
   /** Turn streamed sentences into 48kHz stereo PCM with the active voice (resolved per reply). */
   speak: (text: AsyncIterable<string>, signal: AbortSignal) => AsyncIterable<Buffer>;
   tools?: SessionTools;
+  /** The conversation so far; pass the same array again to carry it over when the bot rejoins a call. */
+  history?: ChatMessage[];
   log: (...a: unknown[]) => void;
   verbose: boolean;
 }
@@ -35,7 +49,10 @@ type Input = { kind: "user"; text: string } | { kind: "notice"; text: string };
  * and spoken when the conversation is idle.
  */
 export class VoiceSession {
-  private history: ChatMessage[] = [];
+  private readonly history: ChatMessage[];
+  private readonly tools: SessionTools;
+  /** Set by the new_conversation tool; the history is cleared once the confirming reply is done. */
+  private resetAfterReply = false;
   private turn?: AbortController;
   /** The in-flight reply; the next one waits for it so history updates never interleave. */
   private current: Promise<void> = Promise.resolve();
@@ -47,7 +64,28 @@ export class VoiceSession {
   private readonly noticeTimer: NodeJS.Timeout;
 
   constructor(private readonly deps: SessionDeps) {
+    this.history = deps.history ?? [];
+    this.tools = {
+      definitions: [...(deps.tools?.definitions ?? []), NEW_CONVERSATION_TOOL],
+      execute: async (name, args, ctx) => {
+        if (name !== "new_conversation") {
+          return deps.tools ? deps.tools.execute(name, args, ctx) : { error: `unknown tool ${name}` };
+        }
+        this.resetAfterReply = true;
+        return { ok: true, note: "The conversation will be cleared after this reply. Confirm in a few words." };
+      },
+    };
     this.noticeTimer = setInterval(() => this.flushNotices(), NOTICE_CHECK_MS);
+  }
+
+  /** Forget the conversation now (stopping any reply in progress). Queued task updates are kept. */
+  reset(): void {
+    this.bargeIn();
+    this.history.length = 0;
+    // An aborted reply may still be finishing and record what it said; clear again once it has
+    // (this runs before any reply queued after the reset).
+    void this.current.then(() => (this.history.length = 0));
+    this.deps.log("conversation reset");
   }
 
   /** Called when Discord reports the user speaking. Opens the STT stream if it's closed. */
@@ -166,7 +204,8 @@ export class VoiceSession {
   }
 
   private async reply(input: Input, speechEndedAt: number, controller: AbortController): Promise<void> {
-    const { chat, speaker, log, tools } = this.deps;
+    const { chat, speaker, log } = this.deps;
+    const { tools } = this;
     const { signal } = controller;
     this.addInput(input);
     if (signal.aborted) {
@@ -226,6 +265,11 @@ export class VoiceSession {
       log(`bot${interrupted ? " (interrupted)" : ""}: ${said}`);
     }
     trimHistory(history, MAX_HISTORY);
+    if (this.resetAfterReply) {
+      this.resetAfterReply = false;
+      history.length = 0;
+      log("conversation cleared");
+    }
     if (this.turn === controller) this.turn = undefined;
   }
 }

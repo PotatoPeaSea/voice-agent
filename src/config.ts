@@ -23,12 +23,23 @@ const flag = z
   .optional()
   .transform((v) => v === "1" || v === "true");
 
+/** A true/false setting where blank means true. */
+const flagDefaultOn = z
+  .string()
+  .optional()
+  .transform((v) => !v?.trim() || v.trim() === "1" || v.trim() === "true");
+
 const EnvSchema = z.object({
   DISCORD_TOKEN: z.string().min(1, "DISCORD_TOKEN is required"),
   DISCORD_GUILD_ID: z.string().min(1, "DISCORD_GUILD_ID is required"),
   DISCORD_VOICE_CHANNEL_ID: z.string().min(1, "DISCORD_VOICE_CHANNEL_ID is required"),
   ALLOWED_USER_IDS: idList,
   VERBOSE: flag,
+  /**
+   * Follow allowed users: join the voice channel they're in and leave once it's empty.
+   * Off = join DISCORD_VOICE_CHANNEL_ID at startup and move only with /join and /leave.
+   */
+  VOICE_AUTO_JOIN: flagDefaultOn,
 
   LLM_BASE_URL: z.string().default("https://api.deepseek.com"),
   LLM_API_KEY: optional,
