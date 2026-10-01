@@ -19,6 +19,7 @@ import { makeStt, resolveVoice, speak } from "./speech/index.js";
 import { loadVoices } from "./speech/voices.js";
 import { dirname, resolve } from "node:path";
 import { VoiceSession } from "./orchestrator/session.js";
+import { isListenMode, LISTEN_MODE_DESCRIPTIONS, LISTEN_MODES, type ListenMode } from "./orchestrator/listen-mode.js";
 import { makeToolbox } from "./orchestrator/toolbox.js";
 import {
   activeSystemPromptName,
@@ -42,6 +43,9 @@ import { MusicTools } from "./orchestrator/music-tools.js";
 
 const env = loadEnv();
 setAssistantName(env.ASSISTANT_NAME);
+/** Shared by every session; set by /mode, starts as LISTEN_MODE. */
+let listenMode: ListenMode = env.LISTEN_MODE;
+const wakeWord = env.WAKE_WORDS.length ? { phrases: env.WAKE_WORDS, idleMs: env.WAKE_IDLE_SECONDS * 1000 } : undefined;
 const log = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 23), ...args);
 
 const voices = loadVoices();
@@ -218,7 +222,8 @@ function join(channelId: string): Promise<void> {
           history,
           // Real speech stops hold music; raw "speaking" blips (coughs, typing) only keep it from starting.
           onTurnStart: () => current.holdMusic?.interrupt(),
-          wakeWord: { phrases: env.WAKE_WORDS, idleMs: env.WAKE_IDLE_SECONDS * 1000 },
+          mode: listenMode,
+          wakeWord,
           log,
           verbose: env.VERBOSE,
         });
@@ -365,6 +370,25 @@ async function onCommand(interaction: ChatInputCommandInteraction): Promise<void
       setActiveSystemPrompt(name);
       log(`system prompt switched to ${name} by ${interaction.user.tag}`);
       await interaction.reply(`System prompt switched to ${describe(name)}. It applies from the next reply.`);
+      break;
+    }
+    case "mode": {
+      const name = interaction.options.getString("name");
+      const describe = (n: ListenMode) =>
+        `**${n}** (${LISTEN_MODE_DESCRIPTIONS[n]}${n === "interrupt" && wakeWord ? `; say "${wakeWord.phrases[0]}"` : ""})`;
+      if (!name || !isListenMode(name)) {
+        const list = LISTEN_MODES.map((n) => `${n === listenMode ? "▶" : "•"} ${describe(n)}`).join("\n");
+        await interaction.reply({ content: `Listen modes (switch with \`/mode name:<mode>\`):\n${list}`, flags: MessageFlags.Ephemeral });
+        break;
+      }
+      if (name === "interrupt" && !wakeWord) {
+        await interaction.reply({ content: "Interrupt mode needs `WAKE_WORDS` or `ASSISTANT_NAME` in `.env`.", flags: MessageFlags.Ephemeral });
+        break;
+      }
+      listenMode = name;
+      for (const session of call?.sessions.values() ?? []) session.setMode(name);
+      log(`listen mode switched to ${name} by ${interaction.user.tag}`);
+      await interaction.reply(`Listen mode switched to ${describe(name)}.`);
       break;
     }
     case "newchat": {

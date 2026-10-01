@@ -4,6 +4,7 @@ import type { ChatMessage, ChatModel } from "../llm/chat.js";
 import type { Speaker } from "../bot/speaker.js";
 import { listenToUser } from "../bot/listener.js";
 import type { SttEvent, SttProvider } from "../speech/types.js";
+import type { ListenMode } from "./listen-mode.js";
 import { chunkSentences } from "./sentences.js";
 import { assistantTurn, type TurnTools } from "./turn.js";
 import type { ToolContext } from "./tools.js";
@@ -26,7 +27,7 @@ export const NEW_CONVERSATION_TOOL: ChatCompletionTool = {
   },
 };
 
-/** Offered only in wake word mode: stops responding until the wake word is heard again. */
+/** Offered only in interrupt mode: stops responding until the wake word is heard again. */
 export const GO_QUIET_TOOL: ChatCompletionTool = {
   type: "function",
   function: {
@@ -50,8 +51,10 @@ export interface SessionDeps {
   history?: ChatMessage[];
   /** Called when speech recognition hears the user start a turn (not on mere mic noise). */
   onTurnStart?: () => void;
+  /** Starting mode (default "default"); change it with setMode(). Interrupt mode needs `wakeWord`. */
+  mode?: ListenMode;
   /**
-   * Wake word mode: ignore everything the user says until a turn contains one of these phrases,
+   * For interrupt mode: ignore everything the user says until a turn contains one of these phrases,
    * then converse normally until `idleMs` pass with nothing said (then wait for the phrase again).
    */
   wakeWord?: { phrases: string[]; idleMs: number };
@@ -78,8 +81,9 @@ export class VoiceSession {
   private idleTimer?: NodeJS.Timeout;
   private userSpeaking = false;
   private lastUserText = "";
-  /** Responding to the user; false while waiting for the wake word. */
-  private awake: boolean;
+  private mode: ListenMode = "default";
+  /** Responding to the user; false while waiting for the wake word (interrupt mode). */
+  private awake = true;
   /** Set by the go_quiet tool; the session stops responding once the goodbye is said. */
   private sleepAfterReply = false;
   private sleepTimer?: NodeJS.Timeout;
@@ -88,19 +92,22 @@ export class VoiceSession {
 
   constructor(private readonly deps: SessionDeps) {
     this.history = deps.history ?? [];
-    this.awake = !deps.wakeWord?.phrases.length;
+    const session = this;
     this.tools = {
-      definitions: [
-        ...(deps.tools?.definitions ?? []),
-        NEW_CONVERSATION_TOOL,
-        ...(deps.wakeWord?.phrases.length ? [GO_QUIET_TOOL] : []),
-      ],
+      // Re-read every model call, so a /mode switch takes effect mid-conversation.
+      get definitions() {
+        return [
+          ...(deps.tools?.definitions ?? []),
+          NEW_CONVERSATION_TOOL,
+          ...(session.interrupting ? [GO_QUIET_TOOL] : []),
+        ];
+      },
       execute: async (name, args, ctx) => {
-        if (name === "go_quiet" && deps.wakeWord?.phrases.length) {
+        if (name === "go_quiet" && this.interrupting) {
           this.sleepAfterReply = true;
           return {
             ok: true,
-            note: `After this reply you stop listening until the user says "${deps.wakeWord.phrases[0]}". Say a short goodbye.`,
+            note: `After this reply you stop listening until the user says "${this.wakePhrase}". Say a short goodbye.`,
           };
         }
         if (name !== "new_conversation") {
@@ -111,6 +118,21 @@ export class VoiceSession {
       },
     };
     this.noticeTimer = setInterval(() => this.flushNotices(), NOTICE_CHECK_MS);
+    this.setMode(deps.mode ?? "default");
+  }
+
+  /**
+   * Switch listen mode. Interrupt mode starts out waiting for the wake word (a reply in progress
+   * still finishes); default mode responds to everything again.
+   */
+  setMode(mode: ListenMode): void {
+    if (mode === "interrupt" && !this.deps.wakeWord?.phrases.length) throw new Error("interrupt mode needs wake words");
+    if (mode === this.mode) return;
+    this.mode = mode;
+    if (mode === "interrupt") return this.sleep("interrupt mode");
+    this.awake = true;
+    this.sleepAfterReply = false;
+    clearTimeout(this.sleepTimer);
   }
 
   /** Forget the conversation now (stopping any reply in progress). Queued task updates are kept. */
@@ -172,6 +194,14 @@ export class VoiceSession {
     }, STT_IDLE_CLOSE_MS);
   }
 
+  private get interrupting(): boolean {
+    return this.mode === "interrupt";
+  }
+
+  private get wakePhrase(): string {
+    return this.deps.wakeWord?.phrases[0] ?? "";
+  }
+
   private heardWakeWord(text: string): boolean {
     return !!this.deps.wakeWord && containsWakeWord(text, this.deps.wakeWord.phrases);
   }
@@ -189,15 +219,15 @@ export class VoiceSession {
     this.deps.log(`${reason}, waiting for the wake word`);
   }
 
-  /** (Re)start the countdown back to waiting for the wake word; a no-op when asleep or wake mode is off. */
+  /** (Re)start the countdown back to waiting for the wake word; a no-op when asleep or not in interrupt mode. */
   private scheduleSleep(): void {
     const wake = this.deps.wakeWord;
-    if (!wake || !this.awake) return;
+    if (!wake || !this.interrupting || !this.awake) return;
     clearTimeout(this.sleepTimer);
     this.sleepTimer = setTimeout(() => {
       if (!this.idle) return this.scheduleSleep();
       this.sleep(`no conversation for ${wake.idleMs / 1000}s`);
-      this.sayLine(`Going quiet. Say ${wake.phrases[0]} when you need me.`);
+      this.sayLine(`Going quiet. Say ${this.wakePhrase} when you need me.`);
     }, wake.idleMs);
   }
 
@@ -390,7 +420,7 @@ export class VoiceSession {
     if (this.sleepAfterReply) {
       this.sleepAfterReply = false;
       // A goodbye cut short by the user means they're still talking.
-      if (!interrupted && this.awake) return this.sleep("user is done");
+      if (!interrupted && this.interrupting && this.awake) return this.sleep("user is done");
     }
     // Count the idle time from when the bot stops talking, not from when the user did.
     this.scheduleSleep();

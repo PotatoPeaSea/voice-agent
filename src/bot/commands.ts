@@ -1,4 +1,5 @@
 import { ChannelType, SlashCommandBuilder } from "discord.js";
+import { LISTEN_MODE_DESCRIPTIONS, LISTEN_MODES } from "../orchestrator/listen-mode.js";
 import { SYSTEM_PROMPT_DESCRIPTIONS, SYSTEM_PROMPT_NAMES } from "../orchestrator/prompt.js";
 import { VOICE_COMMAND } from "./voice-command.js";
 
@@ -20,6 +21,15 @@ export const COMMANDS = [
         .setName("name")
         .setDescription("System prompt to use")
         .addChoices(...SYSTEM_PROMPT_NAMES.map((n) => ({ name: `${n}: ${SYSTEM_PROMPT_DESCRIPTIONS[n]}`, value: n }))),
+    ),
+  new SlashCommandBuilder()
+    .setName("mode")
+    .setDescription("Switch when the bot responds (always, or only after the wake word), or show the current mode")
+    .addStringOption((o) =>
+      o
+        .setName("name")
+        .setDescription("Listen mode to use")
+        .addChoices(...LISTEN_MODES.map((n) => ({ name: `${n}: ${LISTEN_MODE_DESCRIPTIONS[n]}`, value: n }))),
     ),
 ].map((c) => c.toJSON())
   .concat(VOICE_COMMAND);

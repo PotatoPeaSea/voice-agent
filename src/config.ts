@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { z } from "zod";
+import { LISTEN_MODES } from "./orchestrator/listen-mode.js";
 
 const idList = z
   .string()
@@ -49,13 +50,18 @@ const EnvSchema = z.object({
    */
   VOICE_AUTO_JOIN: flagDefaultOn,
 
-  /** The assistant's name, told to the model (e.g. "Veronica"). Usually part of WAKE_WORDS too. */
+  /** The assistant's name, told to the model (e.g. "Veronica"). */
   ASSISTANT_NAME: optional,
   /**
-   * Wake word mode: the bot ignores you until you say one of these phrases (comma-separated, e.g.
-   * "hey jarvis,jarvis"), then converses normally until WAKE_IDLE_SECONDS pass with nothing said.
-   * Blank = always listening.
+   * Listen mode at startup (switch with /mode): "default" responds to everything; "interrupt" ignores
+   * you until you say a wake word, then converses until WAKE_IDLE_SECONDS pass with nothing said.
    */
+  LISTEN_MODE: z
+    .string()
+    .optional()
+    .transform((v) => v?.trim().toLowerCase() || "default")
+    .pipe(z.enum(LISTEN_MODES)),
+  /** Wake phrases for interrupt mode (comma-separated, e.g. "hey veronica,veronica"). Blank = "hey <ASSISTANT_NAME>". */
   WAKE_WORDS: idList,
   WAKE_IDLE_SECONDS: numberWithDefault(120, 5, 3600),
 
@@ -131,5 +137,10 @@ export function loadEnv(): Env {
     const problems = parsed.error.issues.map((i) => `  - ${i.path.join(".")}: ${i.message}`).join("\n");
     throw new Error(`Invalid environment (see .env.example):\n${problems}`);
   }
-  return parsed.data;
+  const env = parsed.data;
+  if (!env.WAKE_WORDS.length && env.ASSISTANT_NAME) env.WAKE_WORDS = [`hey ${env.ASSISTANT_NAME}`];
+  if (env.LISTEN_MODE === "interrupt" && !env.WAKE_WORDS.length) {
+    throw new Error("Invalid environment (see .env.example):\n  - LISTEN_MODE=interrupt needs WAKE_WORDS or ASSISTANT_NAME");
+  }
+  return env;
 }

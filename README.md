@@ -44,13 +44,17 @@ no echo (send path). If receive fails, see the fallbacks in the plan.
 
 Each reply logs a latency breakdown: speech end → turn end → LLM first token → first sentence → TTS first audio → playing.
 
-### Wake word mode
-Set `ASSISTANT_NAME=Veronica` to tell the model its name. Set `WAKE_WORDS=hey veronica` and the bot ignores everything you say until a turn contains that phrase (any case or
-punctuation; comma-separate several, e.g. `hey veronica,veronica`). From then on it talks normally until
-`WAKE_IDLE_SECONDS` (default 120) pass with nothing said by either side (then it says "Going quiet..."), or you
-tell it you're done ("ok we're done, Veronica"; the `go_quiet` tool). Then it waits for the phrase again. While it's
-waiting, your speech doesn't interrupt it or the hold music, but task updates are still spoken. Detection uses the
-Deepgram transcript, so speech is still transcribed while it waits.
+### Listen modes and `/mode`
+- `default`: responds to everything you say.
+- `interrupt`: ignores everything you say until a turn contains a wake phrase (`WAKE_WORDS`, default
+  `hey <ASSISTANT_NAME>`; any case or punctuation; comma-separate several, e.g. `hey veronica,veronica`). It then talks
+  normally until `WAKE_IDLE_SECONDS` (default 120) pass with nothing said by either side (it says "Going quiet...") or
+  you tell it you're done ("ok we're done, Veronica"; the `go_quiet` tool), then waits for the phrase again. While it
+  waits, your speech doesn't interrupt it or the hold music, but task updates are still spoken. Detection uses the
+  Deepgram transcript, so speech is still transcribed while it waits.
+
+`LISTEN_MODE` sets the mode at startup; `/mode` lists the modes and `/mode name:<mode>` switches everyone right away
+(until restart). `ASSISTANT_NAME=Veronica` tells the model its name.
 
 ## Qwen3-TTS voice (local GPU + cloud fallback)
 The active voice is `qwen` in `config/voices.yaml`: Qwen3-TTS on your GPU, falling back to
