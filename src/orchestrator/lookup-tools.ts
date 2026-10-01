@@ -5,7 +5,8 @@ import { errorMessage, parseArgs, toolName, type ToolSet } from "./toolset.js";
 
 const pathProp = {
   type: "string",
-  description: 'A project folder name from list_projects, a path inside one ("Voice Agent/src/main.ts"), or an absolute path inside an allowed root.',
+  description:
+    'A folder name from list_files (a project like "Voice Agent", or one in the home folder like "Documents"), a path inside one ("Voice Agent/src/main.ts"), or an absolute path inside an allowed root.',
 } as const;
 
 export const LOOKUP_TOOL_DEFINITIONS: ChatCompletionTool[] = [
@@ -14,7 +15,7 @@ export const LOOKUP_TOOL_DEFINITIONS: ChatCompletionTool[] = [
     function: {
       name: "list_files",
       description:
-        "List a folder in the project folders, or find files below it by name. Omit path to list the allowed roots and their projects.",
+        "List a folder on the user's computer, or find files below it by name. Omit path to list the allowed roots (project folders and the home folder) and what's in them.",
       parameters: {
         type: "object",
         properties: {
@@ -28,7 +29,7 @@ export const LOOKUP_TOOL_DEFINITIONS: ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "read_file",
-      description: "Read a text file in the project folders (about 4000 characters at a time; use from_line for more).",
+      description: "Read a text file on the user's computer (about 4000 characters at a time; use from_line for more).",
       parameters: {
         type: "object",
         properties: { path: pathProp, from_line: { type: "number", description: "Line to start at (default 1)." } },
@@ -110,6 +111,52 @@ export class LookupTools implements ToolSet {
         default:
           return { error: `unknown tool ${name}` };
       }
+    } catch (err) {
+      return { error: errorMessage(err) };
+    }
+  }
+}
+
+export const FOLDER_TOOL_DEFINITIONS: ChatCompletionTool[] = [
+  {
+    type: "function",
+    function: {
+      name: "create_folder",
+      description:
+        "Create a new folder (and any missing parent folders) on the user's computer, inside the allowed roots. " +
+        "Does nothing if it already exists. Say where you made it in your reply.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: {
+            type: "string",
+            description: 'Where to make it: an existing folder plus the new name, e.g. "Documents/Recipes", "Voice Agent/notes/ideas", or an absolute path.',
+          },
+        },
+        required: ["path"],
+      },
+    },
+  },
+];
+
+const FOLDER_NAMES = new Set(FOLDER_TOOL_DEFINITIONS.map(toolName));
+
+/** File tools that change things (kept apart from LookupTools, which the read-only quick agent also gets). */
+export class FolderTools implements ToolSet {
+  readonly definitions = FOLDER_TOOL_DEFINITIONS;
+
+  constructor(private readonly workspace: Workspace) {}
+
+  handles(name: string): boolean {
+    return FOLDER_NAMES.has(name);
+  }
+
+  async execute(name: string, rawArgs: string): Promise<unknown> {
+    const args = parseArgs(rawArgs);
+    if (typeof args === "string") return { error: args };
+    if (name !== "create_folder") return { error: `unknown tool ${name}` };
+    try {
+      return await this.workspace.createFolder(typeof args.path === "string" ? args.path : "");
     } catch (err) {
       return { error: errorMessage(err) };
     }

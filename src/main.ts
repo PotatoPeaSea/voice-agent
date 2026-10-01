@@ -62,7 +62,7 @@ const workers = makeWorkers(env, registry, log);
 const library = new MusicLibrary(env.MUSIC_PATH, env.MUSIC_VOLUME, log);
 const music = env.MUSIC_ENABLED ? library : undefined;
 const musicTools = new MusicTools({ library, jukebox: () => call?.jukebox });
-const { tools, jobs, mcp } = makeToolbox({
+const { tools, jobs, mcp, fileRoots } = makeToolbox({
   env,
   chat,
   registry,
@@ -188,7 +188,7 @@ function join(channelId: string): Promise<void> {
       ttsConnected = true;
       log(
         `voice: ${voices.active} (${primary.tts.name}${fallback ? `, fallback ${fallback.tts.name}` : ""}), ` +
-          `llm: ${env.LLM_MODEL}, stt: ${env.STT_PROVIDER}, agents: ${workers.map((w) => w.name).join(", ")}, roots: ${roots.join(", ")}`,
+          `llm: ${env.LLM_MODEL}, stt: ${env.STT_PROVIDER}, agents: ${workers.map((w) => w.name).join(", ")}, roots: ${roots.join(", ")}, file tools: ${fileRoots.join(", ")}`,
       );
     }
 

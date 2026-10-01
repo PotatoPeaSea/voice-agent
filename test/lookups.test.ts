@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import { isSecretFile, Workspace } from "../src/lookup/files.js";
-import { LookupTools } from "../src/orchestrator/lookup-tools.js";
+import { inSecretFolder, isSecretFile, Workspace } from "../src/lookup/files.js";
+import { FolderTools, LookupTools } from "../src/orchestrator/lookup-tools.js";
 
 let base: string;
 let root: string;
@@ -27,6 +27,8 @@ beforeAll(() => {
   writeFileSync(join(project, "logo.png"), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 1]));
   writeFileSync(join(base, "outside.txt"), "not yours");
   mkdirSync(join(root, "Other"));
+  mkdirSync(join(root, ".ssh"));
+  writeFileSync(join(root, ".ssh", "config"), "Host potato\n");
   ws = new Workspace([root]);
   tools = new LookupTools(ws);
 });
@@ -48,8 +50,61 @@ describe("Workspace paths", () => {
   });
 
   it("treats credential files as secret but not their examples", () => {
-    for (const name of [".env", ".env.local", "id_rsa", "server.pem", "credentials.json", "auth.json"]) expect(isSecretFile(name)).toBe(true);
+    for (const name of [".env", ".env.local", "id_rsa", "server.pem", "credentials.json", ".credentials.json", "auth.json", ".git-credentials"]) {
+      expect(isSecretFile(name)).toBe(true);
+    }
     for (const name of [".env.example", "main.ts", "environment.ts", "README.md"]) expect(isSecretFile(name)).toBe(false);
+  });
+
+  it("keeps key folders like .ssh off limits", async () => {
+    expect(inSecretFolder(join("home", ".ssh", "config"))).toBe(true);
+    expect(inSecretFolder(join("home", "Documents", "ssh-notes"))).toBe(false);
+    await expect(ws.resolve(".ssh/config")).rejects.toThrow(/off limits/);
+  });
+});
+
+describe("create_folder", () => {
+  // Its own folders, so what it creates (and the link) can't upset the other tests.
+  let out: string;
+  let top: string;
+  let folders: FolderTools;
+  const create = async (path: string) => folders.execute("create_folder", JSON.stringify({ path })) as Promise<Record<string, any>>;
+
+  beforeAll(() => {
+    out = mkdtempSync(join(tmpdir(), "folders-"));
+    top = join(out, "root");
+    mkdirSync(join(top, "Voice Agent"), { recursive: true });
+    mkdirSync(join(top, ".ssh"));
+    writeFileSync(join(top, "Voice Agent", "README.md"), "hi\n");
+    folders = new FolderTools(new Workspace([top]));
+  });
+
+  it("creates a folder and missing parents, matching spoken project names loosely", async () => {
+    expect(await create("voice agent/notes/ideas")).toMatchObject({ created: true, folder: join("Voice Agent", "notes", "ideas") });
+    expect(statSync(join(top, "Voice Agent", "notes", "ideas")).isDirectory()).toBe(true);
+    expect(await create(join(top, "Brand New"))).toMatchObject({ created: true, full_path: join(top, "Brand New") });
+    expect(await create("Voice Agent")).toMatchObject({ created: false });
+  });
+
+  it("refuses paths outside the roots, bad names, files and key folders", async () => {
+    expect((await create("../escaped")).error).toMatch(/inside the allowed folders/);
+    expect((await create(join(out, "elsewhere", "x"))).error).toMatch(/inside the allowed folders/);
+    expect((await create("Voice Agent/../../escaped")).error).toMatch(/can't be used/);
+    expect((await create("Voice Agent/what?")).error).toMatch(/can't be used/);
+    expect((await create("Voice Agent/README.md/sub")).error).toMatch(/is a file/);
+    expect((await create(".ssh/stash")).error).toMatch(/off limits/);
+    expect(existsSync(join(out, "escaped")) || existsSync(join(out, "elsewhere"))).toBe(false);
+  });
+
+  it("won't follow a link that leads outside the roots", async () => {
+    try {
+      symlinkSync(out, join(top, "link"), "junction");
+    } catch {
+      return; // no permission to make links here
+    }
+    expect((await create("link/sneaky")).error).toMatch(/outside|inside the allowed/);
+    expect((await create("Voice Agent/../link/sneaky")).error).toBeDefined();
+    expect(existsSync(join(out, "sneaky"))).toBe(false);
   });
 });
 

@@ -79,7 +79,11 @@ Qwen3-TTS on Alibaba Cloud (`qwen-cloud`) if the local service is down or too sl
 - Cloned voices run ~1.3x realtime on an RTX 3060 (presets ~1.7x), because the reference clip is in every prompt.
 
 ### System prompts and `/prompt`
-- Two personas in `src/orchestrator/prompt.ts`: `default` (terse assistant) and `chatty` (relaxed, talkative; same agent rules).
+- Three personas in `src/orchestrator/prompt.ts`: `default` (terse assistant), `chatty` (relaxed, talkative) and
+  `grill` (all with the same agent rules).
+- `grill` is the grill-me skill for voice: say "grill me on my plan for X" (the `grill_me` tool) and it interviews you
+  about it **one question at a time**, each with its recommended answer, looking facts up itself instead of asking
+  you. When every branch is settled it sums up, asks you to confirm, and switches back to the prompt you were on.
 - `/prompt` lists them; `/prompt name:<prompt>` switches for everyone from the next reply. Saying "be chattier" /
   "back to normal" works too (the `switch_system_prompt` tool). It resets to `default` on restart.
 
@@ -87,7 +91,7 @@ Qwen3-TTS on Alibaba Cloud (`qwen-cloud`) if the local service is down or too sl
 Questions that only need reading don't go to an agent. The voice model has three tiers, picked per request:
 
 1. **Direct lookups**, answered within the turn with no read-back: `list_files`, `read_file`, `search_files`,
-   `git_info` and `current_time` over the `WORKER_ROOTS` folders, plus tools from MCP servers (web search out of
+   `git_info` and `current_time` over the `FILE_ROOTS` folders (default: `WORKER_ROOTS` plus your home folder), plus tools from MCP servers (web search out of
    the box). "What's the weather in Tokyo?", "What was the last commit in the voice agent project?"
 2. **`quick_agent`**, for questions that need several lookups: a short tool loop with the same LLM and the same
    read-only tools, run inside the bot. "Research Proxmox vs TrueNAS for a home server." It always runs in the
@@ -95,8 +99,12 @@ Questions that only need reading don't go to an agent. The voice model has three
 3. **`dispatch_task`** (below), only for work that changes things or runs long.
 
 A lookup still running after `TOOL_WAIT_SECONDS` (default 3) carries on in the background the same way, and hold
-music can play while you wait. File lookups can't leave `WORKER_ROOTS` (symlinks included) and won't open
-credential files (`.env`, keys, `auth.json`...), because file contents are sent to the LLM provider.
+music can play while you wait. File lookups can't leave `FILE_ROOTS` (symlinks included) and won't open
+credential files (`.env`, keys, `auth.json`, `.credentials.json`...) or anything under key folders (`.ssh`, `.aws`,
+`.gnupg`...), because file contents are sent to the LLM provider.
+
+`create_folder` is the one direct file tool that changes something: "make a Recipes folder in Documents" creates it
+(and any missing parents) inside `FILE_ROOTS`, no read-back. Anything else that writes goes through `dispatch_task`.
 
 ### MCP servers
 `config/mcp.yaml` lists MCP servers whose tools the voice model calls directly, as `<server>__<tool>`. It ships with

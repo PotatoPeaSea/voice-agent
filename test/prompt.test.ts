@@ -6,6 +6,7 @@ import {
   activeSystemPrompt,
   activeSystemPromptName,
   CHATTY_SYSTEM_PROMPT,
+  GRILL_SYSTEM_PROMPT,
   setActiveSystemPrompt,
   VOICE_SYSTEM_PROMPT,
 } from "../src/orchestrator/prompt.js";
@@ -28,7 +29,10 @@ describe("system prompts", () => {
   });
 
   it("both prompts keep the agent rules", () => {
-    for (const prompt of [VOICE_SYSTEM_PROMPT, CHATTY_SYSTEM_PROMPT]) expect(prompt).toContain("Before dispatch_task");
+    for (const prompt of [VOICE_SYSTEM_PROMPT, CHATTY_SYSTEM_PROMPT]) {
+      expect(prompt).toContain("Before dispatch_task");
+      expect(prompt).toContain("call grill_me");
+    }
   });
 
   it("switch_system_prompt changes the active prompt and rejects unknown names", async () => {
@@ -38,6 +42,16 @@ describe("system prompts", () => {
     expect(activeSystemPrompt()).toBe(CHATTY_SYSTEM_PROMPT);
     expect(await t.execute("switch_system_prompt", '{"name":"grumpy"}', ctx)).toHaveProperty("error");
     expect(activeSystemPromptName()).toBe("chatty");
+  });
+
+  it("grill_me switches to the grill prompt and remembers which prompt to go back to", async () => {
+    const t = tools();
+    setActiveSystemPrompt("chatty");
+    expect(await t.execute("grill_me", '{"topic":"my startup plan"}', ctx)).toMatchObject({ ok: true, topic: "my startup plan", return_to: "chatty" });
+    expect(activeSystemPrompt()).toBe(GRILL_SYSTEM_PROMPT);
+    expect(await t.execute("grill_me", "{}", ctx)).toMatchObject({ return_to: "default" });
+    expect(GRILL_SYSTEM_PROMPT).toMatch(/ONE question per reply/);
+    expect(GRILL_SYSTEM_PROMPT).toContain("Before dispatch_task");
   });
 
   it("a switch mid-turn applies to the model's next round", async () => {

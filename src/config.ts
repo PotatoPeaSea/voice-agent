@@ -82,6 +82,11 @@ const EnvSchema = z.object({
 
   /** Folders Claude Code tasks may run in (comma-separated). Defaults to the folder containing this project. */
   WORKER_ROOTS: z.string().optional(),
+  /**
+   * Folders the voice model's own file tools may read and create folders in (comma-separated).
+   * Blank = WORKER_ROOTS plus your home folder. Key folders like .ssh and credential files stay off limits.
+   */
+  FILE_ROOTS: idList.transform((l) => (l.length ? l : undefined)),
 
   /**
    * Seconds the voice model waits for a lookup (file, git or MCP tool) before moving on; slower ones

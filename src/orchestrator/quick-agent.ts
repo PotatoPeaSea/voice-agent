@@ -33,7 +33,7 @@ function quickAgentPrompt(roots: string[]): string {
 - Call several tools at once when the lookups don't depend on each other.
 - Stop as soon as you can answer. You have at most ${MAX_ROUNDS} rounds of tool calls; answer with what you have before then.
 - If you couldn't find something, say what you checked.
-Project folders are under: ${roots.join(", ")}. It is now ${now}.`;
+You can read files under: ${roots.join(", ")}. It is now ${now}.`;
 }
 
 export interface QuickAgentDeps {

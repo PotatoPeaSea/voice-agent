@@ -171,6 +171,20 @@ export const TOOL_DEFINITIONS: ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "grill_me",
+      description:
+        "Start a grill-me session when the user asks to be grilled, or to stress-test a plan, decision or idea: " +
+        "you then interview them one question at a time until you reach a shared understanding. " +
+        "Switches your system prompt to grill mode from your next reply, so ask the first question in that reply.",
+      parameters: {
+        type: "object",
+        properties: { topic: { type: "string", description: "What to grill the user about, in their words. Omit if they haven't said yet." } },
+      },
+    },
+  },
 ];
 
 const TOOL_NAMES = new Set(TOOL_DEFINITIONS.map(toolName));
@@ -256,6 +270,18 @@ export class TaskTools {
           const previous = activeSystemPromptName();
           setActiveSystemPrompt(wanted);
           return { ok: true, previous, active: wanted };
+        }
+        case "grill_me": {
+          const previous = activeSystemPromptName();
+          setActiveSystemPrompt("grill");
+          // Already grilling: keep pointing back at the prompt from before it started.
+          const back = previous === "grill" ? "default" : previous;
+          return {
+            ok: true,
+            topic: args.topic?.trim() || "not given yet: ask what they want to be grilled on",
+            return_to: back,
+            next: `Ask question one now, just one. When done or stopped, call switch_system_prompt with "${back}".`,
+          };
         }
         default:
           return { error: `unknown tool ${name}` };

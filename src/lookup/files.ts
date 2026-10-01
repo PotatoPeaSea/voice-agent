@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { open, readdir, realpath, stat } from "node:fs/promises";
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { lstat, mkdir, open, readdir, realpath, stat } from "node:fs/promises";
+import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 const run = promisify(execFile);
@@ -11,7 +11,9 @@ const SKIP_DIRS = new Set([
   "dist", "build", "out", ".next", ".nuxt", "target", ".cache", ".turbo", "coverage", ".idea", ".vs",
 ]);
 /** Files that hold credentials: never read, searched or sent to the model. */
-const SECRET_NAME = /^(\.env(?!\.(example|sample|template)$)(\..+)?|\.npmrc|\.netrc|\.pgpass|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|auth\.json|credentials(\..+)?)$/i;
+const SECRET_NAME = /^(\.env(?!\.(example|sample|template)$)(\..+)?|\.npmrc|\.netrc|\.pgpass|\.git-credentials|id_(rsa|ed25519|ecdsa|dsa)(\.pub)?|auth\.json|\.?credentials(\..+)?)$/i;
+/** Folders of keys and cloud logins (now that the home folder may be a root): nothing inside is reachable. */
+const SECRET_DIRS = new Set([".ssh", ".gnupg", ".aws", ".azure", ".kube", ".docker", "gcloud"]);
 const SECRET_EXT = /\.(pem|key|pfx|p12|jks|keystore|kdbx)$/i;
 
 const MAX_READ_CHARS = 4000;
@@ -27,11 +29,19 @@ export function isSecretFile(path: string): boolean {
   return SECRET_NAME.test(name) || SECRET_EXT.test(name);
 }
 
+/** A path inside one of the SECRET_DIRS. */
+export function inSecretFolder(path: string): boolean {
+  return path.split(/[\\/]/).some((part) => SECRET_DIRS.has(part.toLowerCase()));
+}
+
+/** Characters Windows refuses in a file or folder name. */
+const BAD_NAME = /[<>:"|?*\u0000-\u001f]|[. ]$/;
+
 /** Folder names as speech recognition might mangle them: case, spaces, dashes and underscores ignored. */
 const loose = (name: string) => name.toLowerCase().replace(/[\s_-]+/g, "");
 
 /**
- * Read-only access to the allowed project roots for the voice model's lookup tools.
+ * Access to the allowed roots for the voice model's file tools: reading, plus creating folders.
  * Every path is resolved (symlinks included) and refused if it lands outside the roots.
  */
 export class Workspace {
@@ -57,7 +67,10 @@ export class Workspace {
     }
     for (const candidate of candidates) {
       const real = await realpath(candidate).catch(() => undefined);
-      if (real && (await this.inside(real))) return real;
+      if (real && (await this.inside(real))) {
+        if (inSecretFolder(this.display(real))) throw new Error(`"${path}" is in a folder of keys or logins, so it's off limits.`);
+        return real;
+      }
     }
     throw new Error(`"${path}" isn't an existing path inside the allowed folders (${this.roots.join(", ")}). Use list_files to look around.`);
   }
@@ -77,6 +90,42 @@ export class Workspace {
       if (!rel.startsWith("..") && !isAbsolute(rel)) return rel || root;
     }
     return path;
+  }
+
+  /**
+   * Create a folder (and any missing parents) inside the roots. The path is resolved like resolve(),
+   * except its last parts may not exist yet. Returns where it is, and whether it was already there.
+   */
+  async createFolder(path: string): Promise<{ folder: string; full_path: string; created: boolean }> {
+    const wanted = path.trim().replace(/[\\/]+/g, sep).replace(/[\\/]+$/, "");
+    if (!wanted) throw new Error("path is empty");
+    if (inSecretFolder(wanted)) throw new Error(`"${path}" is in a folder of keys or logins, so it's off limits.`);
+    // The longest existing part of the path that's inside the roots, then the parts still to create.
+    const absolute = isAbsolute(wanted);
+    const top = absolute ? parse(resolve(wanted)).root : "";
+    const parts = (absolute ? relative(top, resolve(wanted)) : wanted).split(sep).filter(Boolean);
+    for (let i = parts.length; i >= (absolute ? 0 : 1); i--) {
+      let existing: string;
+      try {
+        existing = await this.resolve(absolute ? join(top, ...parts.slice(0, i)) : parts.slice(0, i).join(sep));
+      } catch {
+        continue;
+      }
+      if (!(await stat(existing)).isDirectory()) throw new Error(`"${this.display(existing)}" is a file, not a folder.`);
+      const rest = parts.slice(i);
+      if (!rest.length) return { folder: this.display(existing), full_path: existing, created: false };
+      const bad = rest.find((part) => part === ".." || part === "." || BAD_NAME.test(part));
+      if (bad) throw new Error(`"${bad}" can't be used in a folder name.`);
+      // The next part exists but didn't resolve: it leads outside the roots (e.g. a symlink).
+      if (await lstat(join(existing, rest[0]!)).then(() => true, () => false)) {
+        throw new Error(`"${this.display(join(existing, rest[0]!))}" leads outside the allowed folders.`);
+      }
+      const target = join(existing, ...rest);
+      if (inSecretFolder(this.display(target))) throw new Error(`"${path}" is in a folder of keys or logins, so it's off limits.`);
+      await mkdir(target, { recursive: true });
+      return { folder: this.display(target), full_path: target, created: true };
+    }
+    throw new Error(`"${path}" isn't inside the allowed folders (${this.roots.join(", ")}). Use list_files to look around.`);
   }
 
   /** The roots and their project folders. */
@@ -213,7 +262,7 @@ async function* walk(dir: string, signal?: AbortSignal): AsyncGenerator<string> 
       if (entry.isSymbolicLink()) continue;
       const full = join(current, entry.name);
       if (entry.isDirectory()) {
-        if (!SKIP_DIRS.has(entry.name)) pending.push(full);
+        if (!SKIP_DIRS.has(entry.name) && !SECRET_DIRS.has(entry.name.toLowerCase())) pending.push(full);
       } else if (entry.isFile()) {
         seen++;
         yield full;
