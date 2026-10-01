@@ -4,18 +4,26 @@ import { extname, join, resolve } from "node:path";
 
 const EXTENSIONS = new Set([".mp3", ".wav", ".ogg", ".opus", ".flac", ".m4a", ".aac", ".webm"]);
 const FADE_IN_S = 1.5;
+/** Resume hold music a little before where it stopped: audio buffered ahead of the player was never heard. */
+const RESUME_REWIND_S = 1.5;
 
 /**
  * Music from an audio file or a folder of them, decoded with ffmpeg to 48kHz
- * stereo PCM: shuffled hold music, or one requested song. The folder is
- * rescanned on every play, so tracks can be added while the bot runs. Anything
- * missing (path, files, ffmpeg) just means no music, logged once.
+ * stereo PCM: shuffled hold music, or one requested song. Hold music remembers
+ * where it was, so after an interruption it picks up the same track and the
+ * rest of the shuffle. The folder is rescanned whenever the shuffle runs out,
+ * so tracks can be added while the bot runs. Anything missing (path, files,
+ * ffmpeg) just means no music, logged once.
  */
 export class MusicLibrary {
   private readonly path: string;
   private readonly bad = new Set<string>();
   private ffmpegMissing = false;
   private warned = false;
+  /** Hold music still to play, in order. */
+  private queue: string[] = [];
+  /** The hold track that was cut off, and where to pick it up. */
+  private resume?: { file: string; startAtS: number };
 
   constructor(
     path: string,
@@ -38,20 +46,45 @@ export class MusicLibrary {
     return found;
   }
 
-  /** Shuffled tracks on repeat until the signal aborts (or nothing will play). */
-  async *play(signal: AbortSignal): AsyncIterable<Buffer> {
+  /**
+   * Shuffled tracks on repeat until the signal aborts (or nothing will play).
+   * Starts with the track an earlier play() was cut off in, from where it was.
+   */
+  async *play(signal: AbortSignal, now = () => Date.now()): AsyncIterable<Buffer> {
+    let failed = 0;
     while (!signal.aborted) {
-      const tracks = shuffle(this.tracks());
+      const next = this.nextHoldTrack();
+      if (!next) return;
+      const { file, startAtS } = next;
+      const since = now();
       let played = false;
-      for (const track of tracks) {
-        if (signal.aborted) return;
-        for await (const pcm of this.decode(track, signal)) {
+      let done = false;
+      try {
+        for await (const pcm of this.decode(file, signal, this.volume, startAtS)) {
           played = true;
           yield pcm;
         }
+        done = !signal.aborted;
+      } finally {
+        // Cut off (aborted, or the speaker stopped pulling): remember the spot for next time.
+        this.resume = done ? undefined : { file, startAtS: Math.max(0, startAtS + (now() - since) / 1000 - RESUME_REWIND_S) };
       }
-      if (!played) return;
+      // A whole round of tracks without a sound: stop rather than spin.
+      failed = played ? 0 : failed + 1;
+      if (failed > this.tracks().length) return;
     }
+  }
+
+  /** The track to play next: the interrupted one, else the next in the shuffle (reshuffled when it runs out). */
+  private nextHoldTrack(): { file: string; startAtS: number } | undefined {
+    const tracks = this.tracks();
+    if (!tracks.length) return undefined;
+    const available = new Set(tracks);
+    if (this.resume && available.has(this.resume.file)) return this.resume;
+    this.resume = undefined;
+    this.queue = this.queue.filter((f) => available.has(f));
+    if (!this.queue.length) this.queue = shuffle(tracks);
+    return { file: this.queue.shift()!, startAtS: 0 };
   }
 
   /** One track, once, from startAtS seconds in (a requested song, or one resumed after speech). */

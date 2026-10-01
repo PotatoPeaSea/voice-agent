@@ -12,8 +12,14 @@ export interface HoldMusicDeps {
   speaker: Pick<Speaker, "isSpeaking" | "isPlayingBackground" | "playBackground" | "stopBackground">;
   /** True while a background agent is working. */
   waiting: () => boolean;
-  /** True while nobody is talking, about to be answered, or has an update queued. */
+  /** True while nobody is talking, about to be answered, or has an update queued: needed to start. */
   quiet: () => boolean;
+  /**
+   * True while someone is actually talking to the bot (speech recognized), a
+   * reply is coming or an update is queued: this stops music that's playing.
+   * Mic noise that never becomes a turn (coughs, typing) doesn't.
+   */
+  conversing: () => boolean;
   /** Music to play, or undefined if there is none. */
   source: (signal: AbortSignal) => AsyncIterable<Buffer> | undefined;
   /** How long it must stay quiet before music starts. */
@@ -23,9 +29,9 @@ export interface HoldMusicDeps {
 
 /**
  * Fills dead air with music while agents work: starts once the call has been
- * quiet for delayMs with a task running, and stops the moment anyone speaks,
- * a reply starts, or no task is running any more. Speech always wins: the
- * speaker drops background audio whenever it plays a reply.
+ * quiet for delayMs with a task running, and stops when someone starts a turn
+ * (recognized speech), a reply starts, or no task is running any more. Speech
+ * always wins: the speaker drops background audio whenever it plays a reply.
  */
 export class HoldMusic {
   private quietSince?: number;
@@ -48,13 +54,17 @@ export class HoldMusic {
       this.playing = undefined;
       this.quietSince = undefined;
     }
+    if (this.playing) {
+      if (!this.deps.waiting()) this.stop("tasks done");
+      else if (this.deps.conversing()) this.stop("conversation");
+      return;
+    }
     if (!this.deps.waiting() || !this.deps.quiet() || speaker.isSpeaking) {
-      if (this.playing) this.stop(this.deps.waiting() ? "conversation" : "tasks done");
       this.quietSince = undefined;
       return;
     }
     this.quietSince ??= now;
-    if (this.playing || now - this.quietSince < this.deps.delayMs) return;
+    if (now - this.quietSince < this.deps.delayMs) return;
     const controller = new AbortController();
     const music = this.deps.source(controller.signal);
     if (!music) {
@@ -66,7 +76,7 @@ export class HoldMusic {
     speaker.playBackground(music);
   }
 
-  /** Someone started talking or something is about to be said: stop now and restart the wait. */
+  /** Someone started a turn or something is about to be said: stop now and restart the wait. */
   interrupt(): void {
     this.quietSince = undefined;
     if (this.playing) this.stop("interrupted");

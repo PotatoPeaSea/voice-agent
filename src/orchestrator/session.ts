@@ -37,6 +37,8 @@ export interface SessionDeps {
   tools?: SessionTools;
   /** The conversation so far; pass the same array again to carry it over when the bot rejoins a call. */
   history?: ChatMessage[];
+  /** Called when speech recognition hears the user start a turn (not on mere mic noise). */
+  onTurnStart?: () => void;
   log: (...a: unknown[]) => void;
   verbose: boolean;
 }
@@ -158,6 +160,7 @@ export class VoiceSession {
     switch (event.type) {
       case "turn_start":
         this.userSpeaking = true;
+        this.deps.onTurnStart?.();
         if (this.turn || this.deps.speaker.isSpeaking) {
           this.deps.log("barge-in");
           this.bargeIn();

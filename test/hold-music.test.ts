@@ -37,13 +37,14 @@ async function* silence() {}
 
 function setup(opts: { hasMusic?: boolean } = {}) {
   const speaker = new FakeSpeaker();
-  const state = { tasks: 0, quiet: true };
+  const state = { tasks: 0, quiet: true, conversing: false };
   const aborted: AbortSignal[] = [];
   const music = new HoldMusic(
     {
       speaker,
       waiting: () => state.tasks > 0,
       quiet: () => state.quiet,
+      conversing: () => state.conversing,
       source: (signal) => {
         aborted.push(signal);
         return opts.hasMusic === false ? undefined : silence();
@@ -119,6 +120,24 @@ describe("HoldMusic", () => {
     music.check(11_000);
     expect(music.isPlaying).toBe(true);
     expect(speaker.starts).toBe(2);
+  });
+
+  it("keeps playing through mic noise and stops only once a real turn starts", () => {
+    const { speaker, state, music } = setup();
+    state.tasks = 1;
+    music.check(0);
+    music.check(5_000);
+    expect(music.isPlaying).toBe(true);
+
+    state.quiet = false; // Discord "speaking" from a cough, typing or someone else's mic
+    music.check(5_500);
+    expect(music.isPlaying).toBe(true);
+    expect(speaker.starts).toBe(1);
+
+    state.conversing = true; // speech recognized: the user is talking to the bot
+    music.check(6_000);
+    expect(music.isPlaying).toBe(false);
+    expect(speaker.background).toBe(false);
   });
 
   it("notices when a reply replaced the music and waits for quiet again", () => {
@@ -208,6 +227,36 @@ describe("MusicLibrary", () => {
     expect(findAudio(dir).map((f) => f.slice(dir.length + 1))).toEqual(["a.WAV", "b.mp3"]);
     expect(findAudio(join(dir, "b.mp3"))).toHaveLength(1);
     expect(findAudio(join(dir, "missing"))).toEqual([]);
+  });
+
+  it("picks up hold music in the same track, near where it stopped, then carries on with the shuffle", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "music-"));
+    for (const name of ["a.wav", "b.wav", "c.wav"]) writeFileSync(join(dir, name), "");
+    const library = new MusicLibrary(dir, 0.2, log);
+    const decoded: { file: string; startAtS: number }[] = [];
+    let clock = 0;
+    // Each track is two chunks, one second apart.
+    (library as unknown as { decode: unknown }).decode = async function* (file: string, _s: AbortSignal, _v: number, startAtS = 0) {
+      decoded.push({ file, startAtS });
+      yield Buffer.alloc(1);
+      clock += 1_000;
+      yield Buffer.alloc(1);
+    };
+    const now = () => clock;
+
+    let controller = new AbortController();
+    const first = library.play(controller.signal, now)[Symbol.asyncIterator]();
+    await first.next();
+    clock += 30_000; // 30s into the track, then a reply cuts it off
+    await first.return?.(undefined);
+    controller.abort();
+
+    controller = new AbortController();
+    expect(await take(library.play(controller.signal, now), controller, 6)).toBe(6);
+    const [cut, resumed, ...rest] = decoded;
+    expect(resumed).toEqual({ file: cut.file, startAtS: 30 - 1.5 });
+    // The rest of the same shuffle, without the interrupted track or a repeat.
+    expect(new Set([cut.file, ...rest.map((d) => d.file)]).size).toBe(3);
   });
 
   it("degrades to no music when ffmpeg can't be run", async () => {

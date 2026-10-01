@@ -145,8 +145,8 @@ function join(channelId: string): Promise<void> {
     if (call) await leaveNow("moving to another channel");
     const connection = await connectVoice(channelId);
     const speaker = new Speaker(connection, log);
-    const quiet = () =>
-      connection.receiver.speaking.users.size === 0 && [...current.sessions.values()].every((s) => s.quiet);
+    const conversing = () => [...current.sessions.values()].some((s) => !s.quiet);
+    const quiet = () => connection.receiver.speaking.users.size === 0 && !conversing();
     const jukebox = new Jukebox({
       speaker,
       quiet,
@@ -192,6 +192,7 @@ function join(channelId: string): Promise<void> {
         // A requested song beats hold music.
         waiting: () => !jukebox.current && (registry.list().some(isWorking) || jobs.active > 0),
         quiet,
+        conversing,
         source: (signal) => (music.tracks().length ? music.play(signal) : undefined),
         delayMs: env.MUSIC_DELAY_SECONDS * 1000,
         log,
@@ -199,7 +200,6 @@ function join(channelId: string): Promise<void> {
     }
 
     connection.receiver.speaking.on("start", (userId) => {
-      if (call === current) current.holdMusic?.interrupt(); // never play over anyone, allowed or not
       if (!isAllowed(userId) || call !== current) return;
       let session = current.sessions.get(userId);
       if (!session) {
@@ -214,6 +214,8 @@ function join(channelId: string): Promise<void> {
           speak: (text, signal) => speak(voices, env, text, signal, log),
           tools,
           history,
+          // Real speech stops hold music; raw "speaking" blips (coughs, typing) only keep it from starting.
+          onTurnStart: () => current.holdMusic?.interrupt(),
           log,
           verbose: env.VERBOSE,
         });
