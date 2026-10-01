@@ -1,14 +1,38 @@
+# Dependencies and build output
 node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets: only the example is committed
 .env
+.env.*
+!.env.example
+
+# Runtime data, recordings and personal media
 recordings/
 data/
 music/
-*.log
-spike.log
-.venv/
-__pycache__/
-qwen-tts.log
-bot.log
 services/qwen-tts/voices/
 services/qwen-tts/voices-archive/
 Voice sample/
+*.wav
+*.mp3
+
+# Logs
+*.log
+
+# Scratch
+temp-*/
+
+# Editors, OS, local tool settings
+.vscode/
+.idea/
+.claude/settings.local.json
+.DS_Store
+Thumbs.db
+desktop.ini

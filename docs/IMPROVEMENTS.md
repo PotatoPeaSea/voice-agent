@@ -17,14 +17,32 @@ keeping bulky intermediate results (search pages, file contents) out of the cont
   front model.
 - Only read-only tools inside the sandbox; anything marked "Takes action" stays a direct, confirmed tool call.
 
-## 2. Local STT on the Linux workstation
+## 2. Many more tools for the front model, without bloating every turn
+Give the voice model far more capabilities while keeping it sharp. Small models pick worse from long lists, and
+every tool's description is sent on every turn (latency), so growth needs a scaling strategy, not just more entries.
+- More MCP servers in `config/mcp.yaml` (no code): the commented-out time server, Home Assistant, Spotify, GitHub,
+  Google Calendar/Gmail, a memory/notes server, Playwright. Try with `tools: "*"`, then trim to what's used.
+- Native `ToolSet`s (`src/orchestrator/toolset.ts`, combined in `src/orchestrator/toolbox.ts`) for bot-only
+  abilities: post to a Discord text channel, move users between channels, reminders that speak up later,
+  switching voice/TTS mid-call. `music-tools.ts` is the smallest template.
+- Tool search: a small always-on core set, everything else in a catalog behind one `find_tools(query)` tool that
+  activates matches for the rest of the session. E.g. a per-server `core: false` flag in `mcp.yaml` to defer a
+  whole server.
+- Push the long tail down a tier: `quick_agent` gets the full catalog, the front model only the core set and hands
+  off ("do something with my calendar") in one call; the quick agent already runs in the background.
+- Code mode (item 1) composes with this: scripts can call deferred tools without their schemas in the prompt.
+- MCP tools bypass the agents' permission prompts; the only guard on action tools is the "confirm with the user
+  first" description. Keep high-impact actions (sending email, deleting files) behind an agent or an explicit
+  confirmation step.
+
+## 3. Local STT on the Linux workstation
 Self-host a streaming STT with turn detection, registered as a provider, with Deepgram as fallback.
 
-## 3. Speech-to-speech front end (optional)
+## 4. Speech-to-speech front end (optional)
 Evaluate a realtime speech-to-speech model as an alternative front desk for lower latency,
 keeping the same tool set.
 
-## 4. Multi-user support
+## 5. Multi-user support
 Per-user conversation state, allowlists and project roots.
 
 ## Done
