@@ -39,6 +39,11 @@ export interface SessionDeps {
   history?: ChatMessage[];
   /** Called when speech recognition hears the user start a turn (not on mere mic noise). */
   onTurnStart?: () => void;
+  /**
+   * Wake word mode: ignore everything the user says until a turn contains one of these phrases,
+   * then converse normally until `idleMs` pass with nothing said (then wait for the phrase again).
+   */
+  wakeWord?: { phrases: string[]; idleMs: number };
   log: (...a: unknown[]) => void;
   verbose: boolean;
 }
@@ -62,11 +67,15 @@ export class VoiceSession {
   private idleTimer?: NodeJS.Timeout;
   private userSpeaking = false;
   private lastUserText = "";
+  /** Responding to the user; false while waiting for the wake word. */
+  private awake: boolean;
+  private sleepTimer?: NodeJS.Timeout;
   private readonly notices: string[] = [];
   private readonly noticeTimer: NodeJS.Timeout;
 
   constructor(private readonly deps: SessionDeps) {
     this.history = deps.history ?? [];
+    this.awake = !deps.wakeWord?.phrases.length;
     this.tools = {
       definitions: [...(deps.tools?.definitions ?? []), NEW_CONVERSATION_TOOL],
       execute: async (name, args, ctx) => {
@@ -110,6 +119,7 @@ export class VoiceSession {
     this.stt?.abort();
     this.stt = undefined;
     clearTimeout(this.idleTimer);
+    clearTimeout(this.sleepTimer);
     clearInterval(this.noticeTimer);
   }
 
@@ -138,6 +148,37 @@ export class VoiceSession {
     }, STT_IDLE_CLOSE_MS);
   }
 
+  private heardWakeWord(text: string): boolean {
+    return !!this.deps.wakeWord && containsWakeWord(text, this.deps.wakeWord.phrases);
+  }
+
+  private wakeUp(): void {
+    if (!this.awake) this.deps.log("wake word heard, listening");
+    this.awake = true;
+    this.scheduleSleep();
+  }
+
+  /** (Re)start the countdown back to waiting for the wake word; a no-op when asleep or wake mode is off. */
+  private scheduleSleep(): void {
+    const wake = this.deps.wakeWord;
+    if (!wake || !this.awake) return;
+    clearTimeout(this.sleepTimer);
+    this.sleepTimer = setTimeout(() => {
+      if (!this.idle) return this.scheduleSleep();
+      this.awake = false;
+      this.deps.log(`no conversation for ${wake.idleMs / 1000}s, waiting for the wake word`);
+    }, wake.idleMs);
+  }
+
+  /** The user started talking to the bot: stop hold music and anything the bot is saying. */
+  private userTurnStarted(): void {
+    this.deps.onTurnStart?.();
+    if (this.turn || this.deps.speaker.isSpeaking) {
+      this.deps.log("barge-in");
+      this.bargeIn();
+    }
+  }
+
   private async runStt(controller: AbortController): Promise<void> {
     const { connection, userId, log } = this.deps;
     const user = listenToUser(connection, userId, controller.signal, log);
@@ -160,19 +201,30 @@ export class VoiceSession {
     switch (event.type) {
       case "turn_start":
         this.userSpeaking = true;
-        this.deps.onTurnStart?.();
-        if (this.turn || this.deps.speaker.isSpeaking) {
-          this.deps.log("barge-in");
-          this.bargeIn();
-        }
+        // While asleep, wait for the wake word before interrupting anything.
+        if (this.awake) this.userTurnStarted();
         break;
       case "partial":
         if (this.deps.verbose) this.deps.log(`… ${event.text}`);
+        if (!this.awake && this.heardWakeWord(event.text)) {
+          this.wakeUp();
+          this.userTurnStarted();
+        }
         break;
       case "turn_end":
         this.userSpeaking = false;
         this.resetIdleTimer();
-        if (event.text) void this.respond({ kind: "user", text: event.text }, lastPacketAt);
+        if (!event.text) break;
+        if (!this.awake) {
+          if (!this.heardWakeWord(event.text)) {
+            if (this.deps.verbose) this.deps.log(`(asleep, ignored) ${event.text}`);
+            break;
+          }
+          this.wakeUp();
+          this.userTurnStarted();
+        }
+        this.scheduleSleep();
+        void this.respond({ kind: "user", text: event.text }, lastPacketAt);
         break;
     }
   }
@@ -279,7 +331,23 @@ export class VoiceSession {
       log("conversation cleared");
     }
     if (this.turn === controller) this.turn = undefined;
+    // Count the idle time from when the bot stops talking, not from when the user did.
+    this.scheduleSleep();
   }
+}
+
+/** Lowercase words only, so "Hey, Jarvis!" and "hey jarvis" compare equal. */
+function words(text: string): string {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}']+/gu, " ").trim();
+}
+
+/** Whether `text` contains one of the wake phrases as whole words (ignoring case and punctuation). */
+export function containsWakeWord(text: string, phrases: string[]): boolean {
+  const heard = ` ${words(text)} `;
+  return phrases.some((p) => {
+    const phrase = words(p);
+    return !!phrase && heard.includes(` ${phrase} `);
+  });
 }
 
 /**

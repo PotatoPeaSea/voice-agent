@@ -216,6 +216,7 @@ function join(channelId: string): Promise<void> {
           history,
           // Real speech stops hold music; raw "speaking" blips (coughs, typing) only keep it from starting.
           onTurnStart: () => current.holdMusic?.interrupt(),
+          wakeWord: { phrases: env.WAKE_WORDS, idleMs: env.WAKE_IDLE_SECONDS * 1000 },
           log,
           verbose: env.VERBOSE,
         });

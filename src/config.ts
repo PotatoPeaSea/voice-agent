@@ -49,6 +49,14 @@ const EnvSchema = z.object({
    */
   VOICE_AUTO_JOIN: flagDefaultOn,
 
+  /**
+   * Wake word mode: the bot ignores you until you say one of these phrases (comma-separated, e.g.
+   * "hey jarvis,jarvis"), then converses normally until WAKE_IDLE_SECONDS pass with nothing said.
+   * Blank = always listening.
+   */
+  WAKE_WORDS: idList,
+  WAKE_IDLE_SECONDS: numberWithDefault(120, 5, 3600),
+
   LLM_BASE_URL: z.string().default("https://api.deepseek.com"),
   LLM_API_KEY: optional,
   LLM_MODEL: z.string().default("deepseek-flash"),
