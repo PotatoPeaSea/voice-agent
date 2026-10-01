@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { PassThrough } from "node:stream";
 import type { VoiceConnection } from "@discordjs/voice";
 import type { Speaker } from "../src/bot/speaker.js";
-import type { ChatMessage, ChatModel } from "../src/llm/chat.js";
+import type { ChatCompletionTool } from "openai/resources/chat/completions";
+import type { ChatEvent, ChatMessage, ChatModel } from "../src/llm/chat.js";
+import { activeSystemPrompt, setAssistantName, VOICE_SYSTEM_PROMPT } from "../src/orchestrator/prompt.js";
 import { VoiceSession, containsWakeWord } from "../src/orchestrator/session.js";
 import type { SttEvent } from "../src/speech/types.js";
 import { AsyncQueue } from "../src/util/async-queue.js";
@@ -31,14 +33,26 @@ describe("containsWakeWord", () => {
 });
 
 describe("VoiceSession wake word mode", () => {
-  /** A session whose speech recognition events come from `stt` and whose model records what it was asked. */
+  /**
+   * A session whose speech recognition events come from `stt`. The fake model records what it was asked,
+   * calls go_quiet when the user says "done" (and that tool is offered), and otherwise answers "Okay."
+   */
   function setup(idleMs: number) {
     const stt = new AsyncQueue<SttEvent>();
     const heard: string[] = [];
+    const spoken: string[] = [];
+    const offered: string[][] = [];
     const chat = {
-      async *streamWithTools(messages: ChatMessage[]) {
-        heard.push(String(messages.at(-1)?.content));
-        yield { type: "text" as const, text: "Okay." };
+      async *streamWithTools(messages: ChatMessage[], tools: ChatCompletionTool[]): AsyncIterable<ChatEvent> {
+        const last = messages.at(-1)!;
+        if (last.role === "tool") return yield { type: "text", text: "Bye for now." };
+        heard.push(String(last.content));
+        const names = tools.map((t) => (t.type === "function" ? t.function.name : ""));
+        offered.push(names);
+        if (String(last.content).includes("done") && names.includes("go_quiet")) {
+          return yield { type: "tool_calls", calls: [{ id: "c1", name: "go_quiet", arguments: "{}" }] };
+        }
+        yield { type: "text", text: "Okay." };
       },
     } as unknown as ChatModel;
     const speaker = {
@@ -57,10 +71,13 @@ describe("VoiceSession wake word mode", () => {
       chat,
       makeStt: () => ({ name: "fake", transcribe: () => stt }),
       async *speak(text) {
-        for await (const _ of text) yield Buffer.alloc(4);
+        for await (const sentence of text) {
+          spoken.push(sentence);
+          yield Buffer.alloc(4);
+        }
       },
       onTurnStart: () => turnStarts++,
-      wakeWord: { phrases: ["hey jarvis"], idleMs },
+      wakeWord: { phrases: ["hey veronica"], idleMs },
       log: () => {},
       verbose: false,
     });
@@ -68,22 +85,23 @@ describe("VoiceSession wake word mode", () => {
     const say = async (text: string) => {
       stt.push({ type: "turn_start" });
       stt.push({ type: "turn_end", text });
-      await new Promise((r) => setTimeout(r, 30));
+      await wait(30);
     };
-    return { session, heard, say, turnStarts: () => turnStarts };
+    return { session, heard, spoken, offered, say, turnStarts: () => turnStarts };
   }
 
-  it("ignores speech until the wake word, then converses, then sleeps again when idle", async () => {
-    const { session, heard, say, turnStarts } = setup(150);
+  it("ignores speech until the wake word, then converses, then says it's going quiet when idle", async () => {
+    const { session, heard, spoken, say, turnStarts } = setup(150);
     await say("what's the weather");
     expect(heard).toEqual([]);
     expect(turnStarts()).toBe(0); // hold music isn't interrupted by speech it ignores
 
-    await say("Hey Jarvis, what's the weather?");
+    await say("Hey Veronica, what's the weather?");
     await say("and tomorrow?");
-    expect(heard).toEqual(["Hey Jarvis, what's the weather?", "and tomorrow?"]);
+    expect(heard).toEqual(["Hey Veronica, what's the weather?", "and tomorrow?"]);
 
-    await new Promise((r) => setTimeout(r, 250));
+    await wait(250);
+    expect(spoken.at(-1)).toBe("Going quiet. Say hey veronica when you need me.");
     await say("are you there");
     expect(heard).toHaveLength(2);
     session.close();
@@ -91,12 +109,37 @@ describe("VoiceSession wake word mode", () => {
 
   it("keeps listening while the conversation continues", async () => {
     const { session, heard, say } = setup(150);
-    await say("hey jarvis");
+    await say("hey veronica");
     for (let i = 0; i < 4; i++) {
-      await new Promise((r) => setTimeout(r, 80));
+      await wait(80);
       await say(`question ${i}`);
     }
     expect(heard).toHaveLength(5);
     session.close();
   });
+
+  it("goes quiet after a goodbye when the user says they're done (go_quiet)", async () => {
+    const { session, heard, spoken, offered, say } = setup(10_000);
+    await say("hey veronica");
+    expect(offered[0]).toContain("go_quiet");
+    await say("ok we're done");
+    expect(spoken.at(-1)).toBe("Bye for now.");
+    await say("still there?");
+    expect(heard).toEqual(["hey veronica", "ok we're done"]);
+    await say("hey veronica, one more thing");
+    expect(heard).toHaveLength(3);
+    session.close();
+  });
 });
+
+describe("assistant name", () => {
+  afterEach(() => setAssistantName(undefined));
+
+  it("tells the model its name", () => {
+    setAssistantName("Veronica");
+    expect(activeSystemPrompt()).toMatch(/^Your name is Veronica;/);
+    expect(activeSystemPrompt()).toContain(VOICE_SYSTEM_PROMPT);
+  });
+});
+
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));

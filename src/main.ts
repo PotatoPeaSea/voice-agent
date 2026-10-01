@@ -24,6 +24,7 @@ import {
   activeSystemPromptName,
   isSystemPromptName,
   setActiveSystemPrompt,
+  setAssistantName,
   SYSTEM_PROMPT_DESCRIPTIONS,
   SYSTEM_PROMPT_NAMES,
   type SystemPromptName,
@@ -40,6 +41,7 @@ import { Jukebox } from "./bot/jukebox.js";
 import { MusicTools } from "./orchestrator/music-tools.js";
 
 const env = loadEnv();
+setAssistantName(env.ASSISTANT_NAME);
 const log = (...args: unknown[]) => console.log(new Date().toISOString().slice(11, 23), ...args);
 
 const voices = loadVoices();

@@ -49,6 +49,8 @@ const EnvSchema = z.object({
    */
   VOICE_AUTO_JOIN: flagDefaultOn,
 
+  /** The assistant's name, told to the model (e.g. "Veronica"). Usually part of WAKE_WORDS too. */
+  ASSISTANT_NAME: optional,
   /**
    * Wake word mode: the bot ignores you until you say one of these phrases (comma-separated, e.g.
    * "hey jarvis,jarvis"), then converses normally until WAKE_IDLE_SECONDS pass with nothing said.

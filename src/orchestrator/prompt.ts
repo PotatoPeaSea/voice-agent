@@ -74,13 +74,20 @@ export const SYSTEM_PROMPT_DESCRIPTIONS: Record<SystemPromptName, string> = {
 
 /** The prompt used for every turn; shared by all sessions and reset to default on restart. */
 let activePrompt: SystemPromptName = "default";
+/** The assistant's name (ASSISTANT_NAME), told to the model in every prompt. */
+let assistantName: string | undefined;
+
+export function setAssistantName(name: string | undefined): void {
+  assistantName = name;
+}
 
 export function activeSystemPromptName(): SystemPromptName {
   return activePrompt;
 }
 
 export function activeSystemPrompt(): string {
-  return SYSTEM_PROMPTS[activePrompt];
+  const prompt = SYSTEM_PROMPTS[activePrompt];
+  return assistantName ? `Your name is ${assistantName}; the user may address you by it.\n\n${prompt}` : prompt;
 }
 
 export function isSystemPromptName(name: string): name is SystemPromptName {

@@ -12,6 +12,7 @@ import readline from "node:readline/promises";
 import { loadEnv } from "../config.js";
 import { ChatModel, type ChatMessage } from "../llm/chat.js";
 import { assistantTurn } from "../orchestrator/turn.js";
+import { setAssistantName } from "../orchestrator/prompt.js";
 import { makeToolbox } from "../orchestrator/toolbox.js";
 import { MusicTools } from "../orchestrator/music-tools.js";
 import { MusicLibrary } from "../audio/music.js";
@@ -20,6 +21,7 @@ import { describeEvent } from "../tasks/notices.js";
 import { makeWorkers } from "../workers/index.js";
 
 const env = loadEnv();
+setAssistantName(env.ASSISTANT_NAME);
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const log = (...a: unknown[]) => console.log(dim(a.map(String).join(" ")));
 

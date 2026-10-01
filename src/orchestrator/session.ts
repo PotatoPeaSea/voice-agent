@@ -26,6 +26,17 @@ export const NEW_CONVERSATION_TOOL: ChatCompletionTool = {
   },
 };
 
+/** Offered only in wake word mode: stops responding until the wake word is heard again. */
+export const GO_QUIET_TOOL: ChatCompletionTool = {
+  type: "function",
+  function: {
+    name: "go_quiet",
+    description:
+      "Stop listening until the user says the wake word again. Use when the user is done talking for now, e.g. \"ok we're done\", \"that's all for now\", \"thanks, bye\". The conversation is kept and tasks keep running.",
+    parameters: { type: "object", properties: {} },
+  },
+};
+
 export interface SessionDeps {
   connection: VoiceConnection;
   userId: string;
@@ -69,6 +80,8 @@ export class VoiceSession {
   private lastUserText = "";
   /** Responding to the user; false while waiting for the wake word. */
   private awake: boolean;
+  /** Set by the go_quiet tool; the session stops responding once the goodbye is said. */
+  private sleepAfterReply = false;
   private sleepTimer?: NodeJS.Timeout;
   private readonly notices: string[] = [];
   private readonly noticeTimer: NodeJS.Timeout;
@@ -77,8 +90,19 @@ export class VoiceSession {
     this.history = deps.history ?? [];
     this.awake = !deps.wakeWord?.phrases.length;
     this.tools = {
-      definitions: [...(deps.tools?.definitions ?? []), NEW_CONVERSATION_TOOL],
+      definitions: [
+        ...(deps.tools?.definitions ?? []),
+        NEW_CONVERSATION_TOOL,
+        ...(deps.wakeWord?.phrases.length ? [GO_QUIET_TOOL] : []),
+      ],
       execute: async (name, args, ctx) => {
+        if (name === "go_quiet" && deps.wakeWord?.phrases.length) {
+          this.sleepAfterReply = true;
+          return {
+            ok: true,
+            note: `After this reply you stop listening until the user says "${deps.wakeWord.phrases[0]}". Say a short goodbye.`,
+          };
+        }
         if (name !== "new_conversation") {
           return deps.tools ? deps.tools.execute(name, args, ctx) : { error: `unknown tool ${name}` };
         }
@@ -158,6 +182,13 @@ export class VoiceSession {
     this.scheduleSleep();
   }
 
+  /** Stop responding until the wake word is heard again. */
+  private sleep(reason: string): void {
+    this.awake = false;
+    clearTimeout(this.sleepTimer);
+    this.deps.log(`${reason}, waiting for the wake word`);
+  }
+
   /** (Re)start the countdown back to waiting for the wake word; a no-op when asleep or wake mode is off. */
   private scheduleSleep(): void {
     const wake = this.deps.wakeWord;
@@ -165,9 +196,34 @@ export class VoiceSession {
     clearTimeout(this.sleepTimer);
     this.sleepTimer = setTimeout(() => {
       if (!this.idle) return this.scheduleSleep();
-      this.awake = false;
-      this.deps.log(`no conversation for ${wake.idleMs / 1000}s, waiting for the wake word`);
+      this.sleep(`no conversation for ${wake.idleMs / 1000}s`);
+      this.sayLine(`Going quiet. Say ${wake.phrases[0]} when you need me.`);
     }, wake.idleMs);
+  }
+
+  /** Speak a fixed line (no model call), queued after any reply in progress; barge-in stops it. */
+  private sayLine(text: string): void {
+    const { speaker, speak, log } = this.deps;
+    this.turn?.abort();
+    const controller = new AbortController();
+    this.turn = controller;
+    this.current = this.current
+      .then(async () => {
+        if (controller.signal.aborted) return;
+        async function* line() {
+          yield text;
+        }
+        try {
+          await speaker.play(speak(line(), controller.signal), () => {});
+          log(`bot: ${text}`);
+        } catch (err) {
+          if (!controller.signal.aborted) log("reply error:", (err as Error).message);
+        }
+      })
+      .catch((err: Error) => log("reply failed:", err.message))
+      .finally(() => {
+        if (this.turn === controller) this.turn = undefined;
+      });
   }
 
   /** The user started talking to the bot: stop hold music and anything the bot is saying. */
@@ -331,6 +387,11 @@ export class VoiceSession {
       log("conversation cleared");
     }
     if (this.turn === controller) this.turn = undefined;
+    if (this.sleepAfterReply) {
+      this.sleepAfterReply = false;
+      // A goodbye cut short by the user means they're still talking.
+      if (!interrupted && this.awake) return this.sleep("user is done");
+    }
     // Count the idle time from when the bot stops talking, not from when the user did.
     this.scheduleSleep();
   }
