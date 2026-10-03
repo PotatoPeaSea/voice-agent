@@ -169,9 +169,17 @@ export class VoiceSession {
     clearInterval(this.noticeTimer);
   }
 
-  /** Nothing being said, heard or waiting to be said (hold music may play). */
+  /**
+   * Nothing being said, heard or waiting to be said (music may play). While waiting for the wake
+   * word, speech the session ignores doesn't count: nobody is talking to the bot.
+   */
   get quiet(): boolean {
-    return this.idle && !this.notices.length;
+    return !this.turn && !(this.userSpeaking && this.awake) && !this.deps.speaker.isSpeaking && !this.notices.length;
+  }
+
+  /** Responding to what the user says; false while waiting for the wake word (interrupt mode). */
+  get listening(): boolean {
+    return this.awake;
   }
 
   private get idle(): boolean {

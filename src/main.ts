@@ -38,7 +38,7 @@ import { COMMANDS } from "./bot/commands.js";
 import { voiceAutocomplete, voiceCommand, type VoiceCommandDeps } from "./bot/voice-command.js";
 import { HoldMusic, isWorking } from "./bot/hold-music.js";
 import { MusicLibrary } from "./audio/music.js";
-import { Jukebox } from "./bot/jukebox.js";
+import { Jukebox, songMayPlay } from "./bot/jukebox.js";
 import { MusicTools } from "./orchestrator/music-tools.js";
 
 const env = loadEnv();
@@ -155,7 +155,7 @@ function join(channelId: string): Promise<void> {
     const quiet = () => connection.receiver.speaking.users.size === 0 && !conversing();
     const jukebox = new Jukebox({
       speaker,
-      quiet,
+      quiet: () => songMayPlay([...current.sessions.values()], connection.receiver.speaking.users.size > 0),
       source: (file, signal, startAtS) => library.playTrack(file, signal, { volume: env.MUSIC_SONG_VOLUME, startAtS }),
       beforePlay: () => current.holdMusic?.interrupt(),
       log,

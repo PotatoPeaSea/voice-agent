@@ -17,6 +17,22 @@ export interface JukeboxDeps {
   log: (...a: unknown[]) => void;
 }
 
+/** A conversation as the jukebox sees it (VoiceSession). */
+export interface Listener {
+  readonly quiet: boolean;
+  readonly listening: boolean;
+}
+
+/**
+ * Whether a requested song may start or resume: no conversation is going on and nobody's mic is
+ * active. While every session waits for the wake word, mic activity is just people talking among
+ * themselves (or noise), so it doesn't hold the song back: music keeps going while the bot sleeps.
+ */
+export function songMayPlay(sessions: Listener[], micActive: boolean): boolean {
+  if (!sessions.every((s) => s.quiet)) return false;
+  return !micActive || (sessions.length > 0 && sessions.every((s) => !s.listening));
+}
+
 interface Song {
   file: string;
   title: string;
@@ -32,8 +48,8 @@ interface Song {
  * Plays songs the user asks for. A requested song waits for the confirming
  * reply to finish, then plays as background audio. Speech still wins: a reply
  * replaces the song on the speaker, and the song resumes where it was once the
- * call is quiet again. It ends when the track does, on stop(), or when another
- * song is requested.
+ * call is quiet again. It ends when the track does, on stop(), when another
+ * song is requested, or on leaving voice; the bot going quiet (sleeping) doesn't stop it.
  */
 export class Jukebox {
   private song?: Song;
