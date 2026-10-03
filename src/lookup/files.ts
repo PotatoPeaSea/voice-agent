@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { lstat, mkdir, open, readdir, realpath, stat } from "node:fs/promises";
+import { appendFile, lstat, mkdir, open, readdir, realpath, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
@@ -23,6 +23,11 @@ const MAX_FOUND = 100;
 const MAX_MATCHES = 40;
 const MAX_WALKED = 20_000;
 const SEARCH_BUDGET_MS = 8_000;
+const MAX_WRITE_CHARS = 20_000;
+
+/** How write_file changes a file: add lines to the end, make a new one, or replace all its text. */
+export const WRITE_MODES = ["append", "create", "replace"] as const;
+export type WriteMode = (typeof WRITE_MODES)[number];
 
 export function isSecretFile(path: string): boolean {
   const name = basename(path);
@@ -37,11 +42,14 @@ export function inSecretFolder(path: string): boolean {
 /** Characters Windows refuses in a file or folder name. */
 const BAD_NAME = /[<>:"|?*\u0000-\u001f]|[. ]$/;
 
+/** Line ending for files the voice model creates (existing files keep their own). */
+const DEFAULT_EOL = process.platform === "win32" ? "\r\n" : "\n";
+
 /** Folder names as speech recognition might mangle them: case, spaces, dashes and underscores ignored. */
 const loose = (name: string) => name.toLowerCase().replace(/[\s_-]+/g, "");
 
 /**
- * Access to the allowed roots for the voice model's file tools: reading, plus creating folders.
+ * Access to the allowed roots for the voice model's file tools: reading, plus creating folders and writing text files.
  * Every path is resolved (symlinks included) and refused if it lands outside the roots.
  */
 export class Workspace {
@@ -126,6 +134,48 @@ export class Workspace {
       return { folder: this.display(target), full_path: target, created: true };
     }
     throw new Error(`"${path}" isn't inside the allowed folders (${this.roots.join(", ")}). Use list_files to look around.`);
+  }
+
+  /**
+   * Write text to a file inside the roots: "append" adds it as new lines at the end of an existing file,
+   * "create" makes a new file in an existing folder, "replace" swaps an existing file's whole text.
+   * Never deletes, never touches binaries or credential files, and keeps an existing file's line endings.
+   */
+  async writeFile(path: string, text: string, mode: WriteMode): Promise<{ file: string; full_path: string; mode: WriteMode; lines: number }> {
+    if (!WRITE_MODES.includes(mode)) throw new Error(`mode must be one of: ${WRITE_MODES.join(", ")}.`);
+    if (!text.trim()) throw new Error("text is empty");
+    if (text.length > MAX_WRITE_CHARS) throw new Error(`text is too long (${text.length} characters, at most ${MAX_WRITE_CHARS}).`);
+    const lines = text.replace(/(\r?\n)+$/, "").split(/\r?\n/);
+    if (mode === "create") {
+      const wanted = path.trim().replace(/[\\/]+/g, sep).replace(/[\\/]+$/, "");
+      const name = basename(wanted);
+      if (!name || name === ".." || BAD_NAME.test(name)) throw new Error(`"${name}" can't be used as a file name.`);
+      if (isSecretFile(name)) throw new Error(`"${name}" would hold credentials, so it can't be written.`);
+      const folder = await this.resolve(dirname(wanted));
+      if (!(await stat(folder)).isDirectory()) throw new Error(`"${this.display(folder)}" is a file, not a folder.`);
+      const target = join(folder, name);
+      if (await lstat(target).then(() => true, () => false)) throw new Error(`"${this.display(target)}" already exists; use append or replace.`);
+      await writeFile(target, lines.join(DEFAULT_EOL) + DEFAULT_EOL, { encoding: "utf8", flag: "wx" });
+      return { file: this.display(target), full_path: target, mode, lines: lines.length };
+    }
+    const file = await this.resolve(path);
+    const info = await stat(file);
+    if (info.isDirectory()) throw new Error(`"${this.display(file)}" is a folder; give a file inside it.`);
+    if (isSecretFile(file)) throw new Error(`"${basename(file)}" may hold credentials, so it can't be written.`);
+    if (info.size > MAX_FILE_BYTES) throw new Error(`"${this.display(file)}" is too large to edit (${Math.round(info.size / 1e6)} MB).`);
+    const current = await readText(file, info.size);
+    if (current === undefined) throw new Error(`"${this.display(file)}" is a binary file.`);
+    const eol = current.includes("\r\n") ? "\r\n" : current.includes("\n") ? "\n" : DEFAULT_EOL;
+    const body = lines.join(eol);
+    if (mode === "replace") {
+      await writeFile(file, body + eol, "utf8");
+    } else {
+      // Start on a new line, and end with one if the file already did.
+      const lead = current && !current.endsWith("\n") ? eol : "";
+      const trail = !current || current.endsWith("\n") ? eol : "";
+      await appendFile(file, lead + body + trail, "utf8");
+    }
+    return { file: this.display(file), full_path: file, mode, lines: lines.length };
   }
 
   /** The roots and their project folders. */

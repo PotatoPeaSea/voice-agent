@@ -1,5 +1,5 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
-import type { Workspace } from "../lookup/files.js";
+import { WRITE_MODES, type Workspace, type WriteMode } from "../lookup/files.js";
 import type { ToolContext } from "./tools.js";
 import { errorMessage, parseArgs, toolName, type ToolSet } from "./toolset.js";
 
@@ -137,26 +137,56 @@ export const FOLDER_TOOL_DEFINITIONS: ChatCompletionTool[] = [
       },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "write_file",
+      description:
+        "Add to or create a text file on the user's computer, inside the allowed roots, e.g. an item on a to-do list or a note. " +
+        'Mode "append" (default) adds the text as new lines at the end of an existing file; "create" makes a new file; ' +
+        '"replace" swaps the whole file\'s text, so read_file it first and confirm with the user. Can\'t delete files.',
+      parameters: {
+        type: "object",
+        properties: {
+          path: { ...pathProp, description: `${pathProp.description} For "create", an existing folder plus the new file name.` },
+          text: { type: "string", description: "The text to write, plain text with line breaks as needed." },
+          mode: { type: "string", enum: [...WRITE_MODES], description: 'append (default), create or replace.' },
+        },
+        required: ["path", "text"],
+      },
+    },
+  },
 ];
-
-const FOLDER_NAMES = new Set(FOLDER_TOOL_DEFINITIONS.map(toolName));
 
 /** File tools that change things (kept apart from LookupTools, which the read-only quick agent also gets). */
 export class FolderTools implements ToolSet {
-  readonly definitions = FOLDER_TOOL_DEFINITIONS;
+  readonly definitions: ChatCompletionTool[];
+  private readonly names: Set<string>;
 
-  constructor(private readonly workspace: Workspace) {}
+  /** write: offer write_file too (FILE_WRITE_ENABLED). */
+  constructor(private readonly workspace: Workspace, { write = true }: { write?: boolean } = {}) {
+    this.definitions = FOLDER_TOOL_DEFINITIONS.filter((d) => write || toolName(d) !== "write_file");
+    this.names = new Set(this.definitions.map(toolName));
+  }
 
   handles(name: string): boolean {
-    return FOLDER_NAMES.has(name);
+    return this.names.has(name);
   }
 
   async execute(name: string, rawArgs: string): Promise<unknown> {
     const args = parseArgs(rawArgs);
     if (typeof args === "string") return { error: args };
-    if (name !== "create_folder") return { error: `unknown tool ${name}` };
+    if (!this.handles(name)) return { error: `unknown tool ${name}` };
+    const str = (key: string) => (typeof args[key] === "string" ? (args[key] as string) : "");
     try {
-      return await this.workspace.createFolder(typeof args.path === "string" ? args.path : "");
+      switch (name) {
+        case "create_folder":
+          return await this.workspace.createFolder(str("path"));
+        case "write_file":
+          return await this.workspace.writeFile(str("path"), str("text"), (str("mode").trim().toLowerCase() || "append") as WriteMode);
+        default:
+          return { error: `unknown tool ${name}` };
+      }
     } catch (err) {
       return { error: errorMessage(err) };
     }

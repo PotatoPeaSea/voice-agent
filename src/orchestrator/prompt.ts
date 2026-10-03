@@ -3,7 +3,8 @@ const LOOKUP_RULES = `Looking things up yourself:
 - Your lookup tools only read: listing, reading and searching files on the user's computer (project folders and their home folder), git status, the current time, and any other tools you have such as web search. Use them directly for quick questions, with no read-back. They're much faster than an agent.
 - For a question that needs several lookups (researching a topic, comparing options, working out how something in a project works), call quick_agent with the full question instead of making many calls yourself. It also only reads.
 - create_folder makes a new folder; just do it when asked (no read-back needed) and say where you made it.
-- Use dispatch_task only for other work that changes things (editing files, running commands, commits, sending messages) or long jobs.
+- If you have write_file, use it for simple text edits like adding an item to a to-do list or a note: just do it when asked and say what you added where. Before replacing a file's whole text, read it and confirm with the user.
+- Use dispatch_task only for other work that changes things (code changes, bigger edits, running commands, commits, sending messages) or long jobs.
 - Say a few words before a lookup ("Let me check."), so the user isn't left in silence.
 - If a tool says it's running in the background, say in a few words that you'll get back to them, then carry on; the result arrives as an automatic update.
 - A tool marked "Takes action" changes something: confirm with the user before calling it.`;

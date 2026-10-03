@@ -31,7 +31,7 @@ export interface ToolboxDeps {
 /**
  * Every tool the front model gets, in three tiers:
  * - direct lookups (files, git, time, MCP servers such as web search): read-only, answered in the turn;
- *   plus create_folder, the one file tool that changes something;
+ *   plus create_folder and write_file, the file tools that change something;
  * - quick_agent: a short in-process tool loop over the same lookups, for questions needing several;
  * - dispatch_task and friends: full Claude Code / Hermes agents for work that changes things.
  * Lookups that outlast TOOL_WAIT_SECONDS finish in the background; the quick agent always does.
@@ -47,6 +47,6 @@ export function makeToolbox(deps: ToolboxDeps) {
   const quickAgent = new QuickAgent({ chat, tools: lookups, roots: fileRoots, log });
   const jobs = new BackgroundJobs({ waitMs: env.TOOL_WAIT_SECONDS * 1000, timeoutMs: JOB_TIMEOUT_MS, log, onFinish: deps.onJobFinish });
   // The quick agent needs a few LLM rounds, so waiting for it would only be silence: background it at once.
-  const tools = combineTools(new TaskTools(registry, workers, roots), new FolderTools(workspace), music, jobs.wrap(lookups), jobs.wrap(quickAgent, 0));
+  const tools = combineTools(new TaskTools(registry, workers, roots), new FolderTools(workspace, { write: env.FILE_WRITE_ENABLED }), music, jobs.wrap(lookups), jobs.wrap(quickAgent, 0));
   return { tools, jobs, mcp, fileRoots };
 }

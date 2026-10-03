@@ -87,6 +87,8 @@ const EnvSchema = z.object({
    * Blank = WORKER_ROOTS plus your home folder. Key folders like .ssh and credential files stay off limits.
    */
   FILE_ROOTS: idList.transform((l) => (l.length ? l : undefined)),
+  /** Let the voice model add to, create and replace text files in FILE_ROOTS itself (write_file). Never deletes. */
+  FILE_WRITE_ENABLED: flagDefaultOn,
 
   /**
    * Seconds the voice model waits for a lookup (file, git or MCP tool) before moving on; slower ones

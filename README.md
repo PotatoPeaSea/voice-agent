@@ -103,8 +103,12 @@ music can play while you wait. File lookups can't leave `FILE_ROOTS` (symlinks i
 credential files (`.env`, keys, `auth.json`, `.credentials.json`...) or anything under key folders (`.ssh`, `.aws`,
 `.gnupg`...), because file contents are sent to the LLM provider.
 
-`create_folder` is the one direct file tool that changes something: "make a Recipes folder in Documents" creates it
-(and any missing parents) inside `FILE_ROOTS`, no read-back. Anything else that writes goes through `dispatch_task`.
+Two direct file tools change things, both only inside `FILE_ROOTS`. `create_folder`: "make a Recipes folder in
+Documents" creates it (and any missing parents), no read-back. `write_file` (`path`, `text`, `mode`): "add milk to my
+to-do list" appends lines to an existing text file (`mode: append`, the default), `create` makes a new file in an
+existing folder (never overwrites), and `replace` swaps a file's whole text (the model reads it and confirms first).
+It keeps the file's line endings, refuses credential and binary files, and can't delete or empty anything.
+`FILE_WRITE_ENABLED=false` removes it. Anything else that writes goes through `dispatch_task`.
 
 ### MCP servers
 `config/mcp.yaml` lists MCP servers whose tools the voice model calls directly, as `<server>__<tool>`. It ships with

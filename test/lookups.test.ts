@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -105,6 +105,69 @@ describe("create_folder", () => {
     expect((await create("link/sneaky")).error).toMatch(/outside|inside the allowed/);
     expect((await create("Voice Agent/../link/sneaky")).error).toBeDefined();
     expect(existsSync(join(out, "sneaky"))).toBe(false);
+  });
+});
+
+describe("write_file", () => {
+  let out: string;
+  let top: string;
+  let files: FolderTools;
+  const write = async (args: object) => files.execute("write_file", JSON.stringify(args)) as Promise<Record<string, any>>;
+  const text = (...parts: string[]) => readFileSync(join(top, ...parts), "utf8");
+
+  beforeAll(() => {
+    out = mkdtempSync(join(tmpdir(), "writes-"));
+    top = join(out, "root");
+    mkdirSync(join(top, "Lists"), { recursive: true });
+    mkdirSync(join(top, ".ssh"));
+    writeFileSync(join(top, "Lists", "todo.txt"), "eggs\r\nbread");
+    writeFileSync(join(top, "Lists", "notes.md"), "# Notes\n");
+    writeFileSync(join(top, "Lists", ".env"), "SECRET=1\n");
+    writeFileSync(join(top, "Lists", "pic.png"), Buffer.from([0x89, 0x50, 0, 0]));
+    writeFileSync(join(out, "outside.txt"), "not yours\n");
+    files = new FolderTools(new Workspace([top]));
+  });
+
+  it("appends lines by default, keeping the file's line endings", async () => {
+    expect(await write({ path: "lists/todo.txt", text: "milk\ncheese\n" })).toMatchObject({ file: join("Lists", "todo.txt"), mode: "append", lines: 2 });
+    expect(text("Lists", "todo.txt")).toBe("eggs\r\nbread\r\nmilk\r\ncheese");
+    await write({ path: "Lists/notes.md", text: "- call mum", mode: "append" });
+    expect(text("Lists", "notes.md")).toBe("# Notes\n- call mum\n");
+  });
+
+  it("creates new files but never overwrites with create", async () => {
+    expect(await write({ path: "Lists/new.txt", text: "first", mode: "create" })).toMatchObject({ mode: "create", lines: 1 });
+    expect(text("Lists", "new.txt")).toMatch(/^first\r?\n$/);
+    expect((await write({ path: "Lists/new.txt", text: "again", mode: "create" })).error).toMatch(/already exists/);
+    expect((await write({ path: "Lists/missing/new.txt", text: "x", mode: "create" })).error).toMatch(/existing path/);
+    expect((await write({ path: "Lists/bad?.txt", text: "x", mode: "create" })).error).toMatch(/can't be used/);
+  });
+
+  it("replaces a file's whole text, but never empties it", async () => {
+    await write({ path: "Lists/notes.md", text: "# Notes\n- done", mode: "replace" });
+    expect(text("Lists", "notes.md")).toBe("# Notes\n- done\n");
+    expect((await write({ path: "Lists/notes.md", text: "  ", mode: "replace" })).error).toMatch(/empty/);
+    expect((await write({ path: "Lists/notes.md", text: "x", mode: "delete" })).error).toMatch(/mode must be/);
+  });
+
+  it("refuses paths outside the roots, folders, secrets, binaries and key folders", async () => {
+    expect((await write({ path: join(out, "outside.txt"), text: "x" })).error).toMatch(/inside the allowed folders/);
+    expect((await write({ path: "Lists/../../outside.txt", text: "x" })).error).toMatch(/inside the allowed folders/);
+    expect((await write({ path: "../escaped.txt", text: "x", mode: "create" })).error).toMatch(/inside the allowed folders/);
+    expect((await write({ path: "Lists", text: "x" })).error).toMatch(/is a folder/);
+    expect((await write({ path: "Lists/.env", text: "x" })).error).toMatch(/credentials/);
+    expect((await write({ path: "Lists/.env.local", text: "x", mode: "create" })).error).toMatch(/credentials/);
+    expect((await write({ path: "Lists/pic.png", text: "x" })).error).toMatch(/binary/);
+    expect((await write({ path: ".ssh/config", text: "x", mode: "create" })).error).toMatch(/off limits/);
+    expect(readFileSync(join(out, "outside.txt"), "utf8")).toBe("not yours\n");
+    expect(existsSync(join(out, "escaped.txt"))).toBe(false);
+  });
+
+  it("can be turned off", async () => {
+    const readOnly = new FolderTools(new Workspace([top]), { write: false });
+    expect(readOnly.definitions.map((d) => d.type === "function" && d.function.name)).toEqual(["create_folder"]);
+    expect(readOnly.handles("write_file")).toBe(false);
+    expect(await readOnly.execute("write_file", JSON.stringify({ path: "Lists/todo.txt", text: "x" }))).toHaveProperty("error");
   });
 });
 
