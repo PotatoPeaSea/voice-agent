@@ -18,6 +18,8 @@ import { toolName } from "./toolset.js";
 export interface ToolContext {
   /** The user's latest utterance, verbatim. */
   userTranscript: string;
+  /** How many things the user has said so far in this conversation; a later number means a newer reply. */
+  userTurn?: number;
   /** Tell the user something later (queued like a task update); lets slow lookups finish in the background. */
   notify?: (text: string) => void;
   /** Aborted when the tool call should give up (a background lookup timing out). */

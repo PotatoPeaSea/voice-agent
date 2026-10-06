@@ -41,6 +41,8 @@ function notify(text: string): void {
 }
 registry.on("event", (event) => notify(describeEvent(event)));
 
+let userTurns = 0;
+
 async function turn(content: string, transcript: string): Promise<void> {
   history.push({ role: "user", content });
   process.stdout.write("\x1b[36mbot:\x1b[0m ");
@@ -49,7 +51,7 @@ async function turn(content: string, transcript: string): Promise<void> {
     chat,
     history,
     tools,
-    ctx: { userTranscript: transcript, notify },
+    ctx: { userTranscript: transcript, userTurn: transcript ? ++userTurns : userTurns, notify },
     signal: new AbortController().signal,
     log: (...a) => console.log(`\n${dim(a.map(String).join(" "))}`),
     onFinal: (text) => (final = text),

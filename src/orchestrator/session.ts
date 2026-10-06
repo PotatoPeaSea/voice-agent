@@ -81,6 +81,8 @@ export class VoiceSession {
   private idleTimer?: NodeJS.Timeout;
   private userSpeaking = false;
   private lastUserText = "";
+  /** User utterances so far (a merged one counts once), so a tool can tell a newer reply from the one that started the turn. */
+  private userTurns = 0;
   private mode: ListenMode = "default";
   /** Responding to the user; false while waiting for the wake word (interrupt mode). */
   private awake = true;
@@ -343,6 +345,7 @@ export class VoiceSession {
     } else {
       this.history.push({ role: "user", content: input.text });
     }
+    this.userTurns++;
     this.deps.log(`you: ${input.text}`);
   }
 
@@ -367,7 +370,7 @@ export class VoiceSession {
       return;
     }
     const history = this.history;
-    const ctx: ToolContext = { userTranscript: this.lastUserText, notify: (text) => this.notify(text) };
+    const ctx: ToolContext = { userTranscript: this.lastUserText, userTurn: this.userTurns, notify: (text) => this.notify(text) };
 
     const t0 = Date.now();
     const marks: Record<string, number> = {};

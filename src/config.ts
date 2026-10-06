@@ -100,6 +100,13 @@ const EnvSchema = z.object({
    * finish in the background and are reported as an automatic update (quick_agent always does).
    */
   TOOL_WAIT_SECONDS: numberWithDefault(3, 0, 60),
+  /**
+   * Let the voice model run shell commands itself (run_command): read-only ones at once, anything else only after you
+   * say yes in a later reply. Credential files are off limits and the bot's own tokens aren't passed to commands.
+   */
+  SHELL_ENABLED: flagDefaultOn,
+  /** Shell for run_command. Blank = Git Bash on Windows if installed (else PowerShell), /bin/bash elsewhere. */
+  SHELL_PATH: optional,
   /** MCP servers whose tools the voice model calls directly. A missing file means none. */
   MCP_CONFIG: withDefault("config/mcp.yaml"),
   /**

@@ -9,6 +9,7 @@ import type { WorkerAdapter } from "../workers/types.js";
 import { BackgroundJobs } from "./background.js";
 import { FolderTools, LookupTools } from "./lookup-tools.js";
 import { QuickAgent } from "./quick-agent.js";
+import { detectShell, ShellTools } from "./shell-tools.js";
 import { TaskTools } from "./tools.js";
 import { combineTools, type ToolSet } from "./toolset.js";
 
@@ -47,6 +48,15 @@ export function makeToolbox(deps: ToolboxDeps) {
   const quickAgent = new QuickAgent({ chat, tools: lookups, roots: fileRoots, log });
   const jobs = new BackgroundJobs({ waitMs: env.TOOL_WAIT_SECONDS * 1000, timeoutMs: JOB_TIMEOUT_MS, log, onFinish: deps.onJobFinish });
   // The quick agent needs a few LLM rounds, so waiting for it would only be silence: background it at once.
-  const tools = combineTools(new TaskTools(registry, workers, roots), new FolderTools(workspace, { write: env.FILE_WRITE_ENABLED }), music, jobs.wrap(lookups), jobs.wrap(quickAgent, 0));
+  // Commands may run long; they continue in the background like any slow lookup.
+  const shell = env.SHELL_ENABLED ? new ShellTools({ workspace, shell: detectShell(env.SHELL_PATH), log }) : undefined;
+  const tools = combineTools(
+    new TaskTools(registry, workers, roots),
+    new FolderTools(workspace, { write: env.FILE_WRITE_ENABLED }),
+    music,
+    jobs.wrap(lookups),
+    jobs.wrap(quickAgent, 0),
+    ...(shell ? [jobs.wrap(shell)] : []),
+  );
   return { tools, jobs, mcp, fileRoots };
 }
