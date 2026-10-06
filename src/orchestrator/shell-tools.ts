@@ -3,14 +3,13 @@ import { existsSync } from "node:fs";
 import { basename } from "node:path";
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import { inSecretFolder, isSecretFile, type Workspace } from "../lookup/files.js";
+import { Confirmations } from "./confirm.js";
 import type { ToolContext } from "./tools.js";
 import { errorMessage, parseArgs, type ToolSet } from "./toolset.js";
 
 const DEFAULT_TIMEOUT_MS = 100_000;
 const MAX_OUTPUT_CHARS = 4000;
 const MAX_CAPTURE_CHARS = 400_000;
-/** A command waiting for the user's yes is forgotten after this long. */
-const PENDING_TTL_MS = 5 * 60_000;
 
 export type ShellKind = "bash" | "powershell";
 export interface ShellInfo {
@@ -186,18 +185,6 @@ export const runInShell: CommandRunner = (shell, command, cwd, signal, timeoutMs
     });
   });
 
-const AFFIRMATIVE = /\b(yes|yeah|yep|yup|sure|ok|okay|go ahead|go for it|do it|run it|confirm|confirmed|please do|sounds good|that's fine|go on)\b/i;
-const NEGATIVE = /\b(no|nope|nah|don'?t|do not|stop|cancel|wait|hold on|never ?mind|not yet|abort)\b/i;
-
-interface Pending {
-  command: string;
-  cwd: string;
-  /** Which user turn proposed it; only a later turn can confirm it. */
-  turn: number;
-  transcript: string;
-  at: number;
-}
-
 export function shellToolDefinition(shell: ShellInfo): ChatCompletionTool {
   const name = shell.kind === "bash" ? "bash" : "PowerShell";
   return {
@@ -239,8 +226,7 @@ export interface ShellToolsOptions {
  */
 export class ShellTools implements ToolSet {
   readonly definitions: ChatCompletionTool[];
-  private readonly pending = new Map<string, Pending>();
-  private next = 1;
+  private readonly confirmations = new Confirmations<{ command: string; cwd: string }>("c");
   private readonly runner: CommandRunner;
   private readonly log: (...a: unknown[]) => void;
 
@@ -281,10 +267,7 @@ export class ShellTools implements ToolSet {
   }
 
   private propose(command: string, cwd: string, ctx: ToolContext): unknown {
-    const now = Date.now();
-    for (const [id, p] of this.pending) if (now - p.at > PENDING_TTL_MS) this.pending.delete(id);
-    const id = `c${this.next++}`;
-    this.pending.set(id, { command, cwd, turn: ctx.userTurn ?? -1, transcript: ctx.userTranscript, at: now });
+    const id = this.confirmations.propose({ command, cwd }, ctx);
     this.log(`shell: waiting for the user's yes (${id}): ${command}`);
     return {
       needs_confirmation: true,
@@ -296,20 +279,8 @@ export class ShellTools implements ToolSet {
   }
 
   private async confirm(id: string, ctx: ToolContext): Promise<unknown> {
-    const pending = this.pending.get(id);
-    if (!pending) return { error: `No pending command "${id}" (it may have expired or already run). Propose it again.` };
-    if (Date.now() - pending.at > PENDING_TTL_MS) {
-      this.pending.delete(id);
-      return { error: "That command expired. Propose it again." };
-    }
-    const sameTurn = ctx.userTurn !== undefined ? ctx.userTurn <= pending.turn : ctx.userTranscript === pending.transcript;
-    if (sameTurn) return { error: "The user hasn't answered yet. Read the command back in plain words, ask if you should run it, and wait for their reply." };
-    if (NEGATIVE.test(ctx.userTranscript) && !AFFIRMATIVE.test(ctx.userTranscript)) {
-      this.pending.delete(id);
-      return { error: "The user's reply wasn't a yes, so the command was dropped. Don't run it." };
-    }
-    this.pending.delete(id);
-    return await this.execNow(pending.command, pending.cwd, ctx);
+    const taken = this.confirmations.take(id, ctx);
+    return taken.ok ? await this.execNow(taken.payload.command, taken.payload.cwd, ctx) : { error: taken.error };
   }
 
   private async execNow(command: string, cwd: string, ctx: ToolContext): Promise<unknown> {

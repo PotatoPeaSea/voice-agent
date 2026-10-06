@@ -10,6 +10,7 @@ import { BackgroundJobs } from "./background.js";
 import { FolderTools, LookupTools } from "./lookup-tools.js";
 import { QuickAgent } from "./quick-agent.js";
 import type { MemoryClient } from "../memory/client.js";
+import { DiscordTools, type DiscordGateway } from "./discord-tools.js";
 import { MemoryTools } from "./memory-tools.js";
 import { detectShell, ShellTools } from "./shell-tools.js";
 import { TaskTools } from "./tools.js";
@@ -26,6 +27,8 @@ export interface ToolboxDeps {
   /** Folders agents may work in. */
   roots: string[];
   music: ToolSet;
+  /** The bot's Discord server; the discord_* tools are offered only when this is set. */
+  discord?: DiscordGateway;
   /** Shared long-term memory; its tools are offered only when this is set. */
   memory?: MemoryClient;
   log: (...a: unknown[]) => void;
@@ -62,6 +65,7 @@ export function makeToolbox(deps: ToolboxDeps) {
     jobs.wrap(quickAgent, 0),
     ...(shell ? [jobs.wrap(shell)] : []),
     ...(deps.memory ? [new MemoryTools(deps.memory)] : []),
+    ...(deps.discord ? [jobs.wrap(new DiscordTools(deps.discord, log))] : []),
   );
   return { tools, jobs, mcp, fileRoots };
 }

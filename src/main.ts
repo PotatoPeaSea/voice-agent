@@ -41,6 +41,7 @@ import { MusicLibrary } from "./audio/music.js";
 import { Jukebox, songMayPlay } from "./bot/jukebox.js";
 import { MusicTools } from "./orchestrator/music-tools.js";
 import { MemoryClient } from "./memory/client.js";
+import { DiscordJsGateway } from "./orchestrator/discord-tools.js";
 
 const env = loadEnv();
 setAssistantName(env.ASSISTANT_NAME);
@@ -76,6 +77,7 @@ const { tools, jobs, mcp, fileRoots } = makeToolbox({
   roots,
   music: musicTools,
   memory,
+  discord: env.DISCORD_TOOLS_ENABLED ? new DiscordJsGateway(() => guild) : undefined,
   log,
   onJobFinish: () => call?.holdMusic?.interrupt(),
 });

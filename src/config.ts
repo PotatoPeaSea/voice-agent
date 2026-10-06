@@ -108,6 +108,12 @@ const EnvSchema = z.object({
   /** Shell for run_command. Blank = Git Bash on Windows if installed (else PowerShell), /bin/bash elsewhere. */
   SHELL_PATH: optional,
   /**
+   * Let the voice model read the Discord server's channels (discord_read) and post to them (discord_send, only after you
+   * say yes). Needs the bot to have View Channel and Read Message History; seeing what people wrote also needs the
+   * Message Content intent switched on in the Discord developer portal.
+   */
+  DISCORD_TOOLS_ENABLED: flagDefaultOn,
+  /**
    * Shared long-term memory service (memory-core gateway, e.g. http://potatoserver:8420). Blank = off. When set, every
    * exchange is saved to it and the voice model gets memory_search and memory_remember.
    */
