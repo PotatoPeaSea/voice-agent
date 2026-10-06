@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { speakWithFallback, type Voice } from "../src/speech/fallback.js";
 import type { TtsProvider } from "../src/speech/types.js";
 
@@ -56,5 +56,62 @@ describe("speakWithFallback", () => {
     const out = await run(fakeVoice("p2", "fail-second"), fakeVoice("b", "ok"), "one.", "two.", "three.");
     expect(out[0]).toBe("p2:one.");
     expect(out).toContain("b:three.");
+  });
+
+  it("doesn't count the model's thinking time against the voice's first-audio timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const primary = fakeVoice("slow-llm-primary", "ok");
+      const secondary = fakeVoice("slow-llm-secondary", "ok");
+      // The model spends 20s generating a long tool call before it says anything.
+      async function* text() {
+        await new Promise((r) => setTimeout(r, 20_000));
+        yield "done.";
+      }
+      const out: string[] = [];
+      const reply = (async () => {
+        for await (const pcm of speakWithFallback(primary, secondary, text(), new AbortController().signal, () => {})) {
+          out.push(pcm.toString());
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await reply;
+      expect(out).toEqual(["slow-llm-primary:done."]);
+      expect(secondary.heard).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still falls back when the voice is slow after it has the text", async () => {
+    vi.useFakeTimers();
+    try {
+      const secondary = fakeVoice("slow-voice-secondary", "ok");
+      const stuck: Voice = {
+        profile: { provider: "slow-voice-primary", voiceId: "v" },
+        tts: {
+          name: "slow-voice-primary",
+          async *synthesize(text) {
+            for await (const _ of text) await new Promise(() => {}); // never produces audio
+            yield Buffer.alloc(0);
+          },
+          listVoices: async () => [],
+        },
+      };
+      async function* text() {
+        yield "hello.";
+      }
+      const out: string[] = [];
+      const reply = (async () => {
+        for await (const pcm of speakWithFallback(stuck, secondary, text(), new AbortController().signal, () => {})) {
+          out.push(pcm.toString());
+        }
+      })();
+      await vi.advanceTimersByTimeAsync(5_001);
+      await reply;
+      expect(out).toEqual(["slow-voice-secondary:hello."]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

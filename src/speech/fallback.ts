@@ -24,15 +24,24 @@ class TextFeed {
   private generation = 0;
   /** Sentences handed to the current consumer. */
   sent: string[] = [];
+  /** Resolves once the current consumer has been handed its first sentence. */
+  firstDelivered: Promise<void> = Promise.resolve();
 
   constructor(text: AsyncIterable<string>) {
     this.source = text[Symbol.asyncIterator]();
   }
 
   /** Retire the current consumer and start a new one, optionally replaying sentences first. */
-  async *next(replay: string[] = []): AsyncIterable<string> {
+  next(replay: string[] = []): AsyncIterable<string> {
     const id = ++this.generation;
     this.sent = [...replay];
+    let delivered!: () => void;
+    this.firstDelivered = new Promise<void>((resolve) => (delivered = resolve));
+    return this.consume(id, replay, delivered);
+  }
+
+  private async *consume(id: number, replay: string[], delivered: () => void): AsyncIterable<string> {
+    if (replay.length) delivered();
     yield* replay;
     while (id === this.generation) {
       let value = this.pending.shift();
@@ -46,6 +55,7 @@ class TextFeed {
         }
       }
       this.sent.push(value);
+      delivered();
       yield value;
     }
   }
@@ -54,7 +64,8 @@ class TextFeed {
 /**
  * Speak with the primary voice, falling back to the secondary if the primary
  * errors or produces no audio in time. A failed primary is skipped for a cool-down
- * period. If it fails before any audio, the whole reply is replayed on the fallback;
+ * period (its first-audio clock starts when it's handed its first sentence, not when the reply begins).
+ * If it fails before any audio, the whole reply is replayed on the fallback;
  * if it fails mid-reply, the fallback continues with the sentences not yet sent.
  */
 export async function* speakWithFallback(
@@ -79,7 +90,7 @@ export async function* speakWithFallback(
   try {
     const audio = primary.tts.synthesize(feed.next(), primary.profile, primaryAbort.signal)[Symbol.asyncIterator]();
     while (true) {
-      const next = gotAudio ? await audio.next() : await withTimeout(audio.next(), FIRST_AUDIO_TIMEOUT_MS);
+      const next = gotAudio ? await audio.next() : await withTimeout(audio.next(), feed.firstDelivered, FIRST_AUDIO_TIMEOUT_MS);
       if (next.done) return;
       gotAudio = true;
       yield next.value;
@@ -97,10 +108,22 @@ export async function* speakWithFallback(
   yield* secondary.tts.synthesize(feed.next(replay), secondary.profile, signal);
 }
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
-  let timer: NodeJS.Timeout;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`no audio within ${ms}ms`)), ms);
+/**
+ * Rejects if `promise` hasn't settled `ms` after `started` resolves. The clock waits for `started`
+ * because the model can take many seconds to produce its first sentence (a long tool call, say),
+ * and that wait is no fault of the voice.
+ */
+function withTimeout<T>(promise: Promise<T>, started: Promise<void>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  let settled = false;
+  const timeout = started.then(
+    () =>
+      new Promise<never>((_, reject) => {
+        if (!settled) timer = setTimeout(() => reject(new Error(`no audio within ${ms}ms`)), ms);
+      }),
+  );
+  return Promise.race([promise, timeout]).finally(() => {
+    settled = true;
+    clearTimeout(timer);
   });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
