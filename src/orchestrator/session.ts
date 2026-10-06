@@ -49,6 +49,8 @@ export interface SessionDeps {
   tools?: SessionTools;
   /** The conversation so far; pass the same array again to carry it over when the bot rejoins a call. */
   history?: ChatMessage[];
+  /** Called after a completed reply to something the user said (not interrupted, not an automatic update), e.g. to save it to memory. */
+  onExchange?: (userText: string, assistantText: string) => void;
   /** Called when speech recognition hears the user start a turn (not on mere mic noise). */
   onTurnStart?: () => void;
   /** Starting mode (default "default"); change it with setMode(). Interrupt mode needs `wakeWord`. */
@@ -421,6 +423,7 @@ export class VoiceSession {
       history.push({ role: "assistant", content: interrupted ? `${said} [interrupted by user]` : said });
       log(`bot${interrupted ? " (interrupted)" : ""}: ${said}`);
     }
+    if (input.kind === "user" && !interrupted && finalText) this.deps.onExchange?.(this.lastUserText, finalText);
     trimHistory(history, MAX_HISTORY);
     if (this.resetAfterReply) {
       this.resetAfterReply = false;

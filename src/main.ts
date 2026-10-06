@@ -40,6 +40,7 @@ import { HoldMusic, isWorking } from "./bot/hold-music.js";
 import { MusicLibrary } from "./audio/music.js";
 import { Jukebox, songMayPlay } from "./bot/jukebox.js";
 import { MusicTools } from "./orchestrator/music-tools.js";
+import { MemoryClient } from "./memory/client.js";
 
 const env = loadEnv();
 setAssistantName(env.ASSISTANT_NAME);
@@ -62,6 +63,11 @@ const workers = makeWorkers(env, registry, log);
 const library = new MusicLibrary(env.MUSIC_PATH, env.MUSIC_VOLUME, log);
 const music = env.MUSIC_ENABLED ? library : undefined;
 const musicTools = new MusicTools({ library, jukebox: () => call?.jukebox, holdMusic: () => call?.holdMusic });
+/** Shared long-term memory on another machine (MEMORY_URL); every exchange is saved and the model can search it. */
+const memory = env.MEMORY_URL
+  ? new MemoryClient({ url: env.MEMORY_URL, apiKey: env.MEMORY_API_KEY, agentId: env.MEMORY_AGENT_ID, log })
+  : undefined;
+if (memory) void memory.healthy().then((ok) => log(ok ? `memory: connected to ${env.MEMORY_URL}` : `memory: ${env.MEMORY_URL} isn't answering yet; will keep trying`));
 const { tools, jobs, mcp, fileRoots } = makeToolbox({
   env,
   chat,
@@ -69,6 +75,7 @@ const { tools, jobs, mcp, fileRoots } = makeToolbox({
   workers,
   roots,
   music: musicTools,
+  memory,
   log,
   onJobFinish: () => call?.holdMusic?.interrupt(),
 });
@@ -220,6 +227,13 @@ function join(channelId: string): Promise<void> {
           speak: (text, signal) => speak(voices, env, text, signal, log),
           tools,
           history,
+          onExchange: memory
+            ? (user, assistant) =>
+                memory.capture(`voice-${userId}-${new Date().toISOString().slice(0, 10)}`, [
+                  { role: "user", content: user },
+                  { role: "assistant", content: assistant },
+                ])
+            : undefined,
           // Real speech stops hold music; raw "speaking" blips (coughs, typing) only keep it from starting.
           onTurnStart: () => current.holdMusic?.interrupt(),
           mode: listenMode,

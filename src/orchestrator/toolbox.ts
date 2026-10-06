@@ -9,6 +9,8 @@ import type { WorkerAdapter } from "../workers/types.js";
 import { BackgroundJobs } from "./background.js";
 import { FolderTools, LookupTools } from "./lookup-tools.js";
 import { QuickAgent } from "./quick-agent.js";
+import type { MemoryClient } from "../memory/client.js";
+import { MemoryTools } from "./memory-tools.js";
 import { detectShell, ShellTools } from "./shell-tools.js";
 import { TaskTools } from "./tools.js";
 import { combineTools, type ToolSet } from "./toolset.js";
@@ -24,6 +26,8 @@ export interface ToolboxDeps {
   /** Folders agents may work in. */
   roots: string[];
   music: ToolSet;
+  /** Shared long-term memory; its tools are offered only when this is set. */
+  memory?: MemoryClient;
   log: (...a: unknown[]) => void;
   /** Called when a background lookup finishes, just before its result is queued for the user. */
   onJobFinish?: () => void;
@@ -57,6 +61,7 @@ export function makeToolbox(deps: ToolboxDeps) {
     jobs.wrap(lookups),
     jobs.wrap(quickAgent, 0),
     ...(shell ? [jobs.wrap(shell)] : []),
+    ...(deps.memory ? [new MemoryTools(deps.memory)] : []),
   );
   return { tools, jobs, mcp, fileRoots };
 }

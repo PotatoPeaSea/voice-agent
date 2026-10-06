@@ -107,6 +107,14 @@ const EnvSchema = z.object({
   SHELL_ENABLED: flagDefaultOn,
   /** Shell for run_command. Blank = Git Bash on Windows if installed (else PowerShell), /bin/bash elsewhere. */
   SHELL_PATH: optional,
+  /**
+   * Shared long-term memory service (memory-core gateway, e.g. http://potatoserver:8420). Blank = off. When set, every
+   * exchange is saved to it and the voice model gets memory_search and memory_remember.
+   */
+  MEMORY_URL: optional,
+  MEMORY_API_KEY: optional,
+  /** Memory is shared between agents that use the same id (default "shared"). */
+  MEMORY_AGENT_ID: withDefault("shared"),
   /** MCP servers whose tools the voice model calls directly. A missing file means none. */
   MCP_CONFIG: withDefault("config/mcp.yaml"),
   /**
