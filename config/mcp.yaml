@@ -17,6 +17,30 @@ servers:
     url: https://mcp.exa.ai/mcp
     tools: [web_search_exa, web_fetch_exa]
 
+  # Google Workspace (taylorwilsdon/google_workspace_mcp, needs uv): Gmail, Calendar, Drive and Docs, read-only
+  # (--read-only drops every send, create, edit and delete tool). Needs a "Desktop app" OAuth client from your own
+  # Google Cloud project with the Gmail, Calendar, Drive and Docs APIs on; put GOOGLE_OAUTH_CLIENT_ID,
+  # GOOGLE_OAUTH_CLIENT_SECRET and USER_GOOGLE_EMAIL in .env. Authorize once with `npm run google:auth` (opens the
+  # consent page in your browser); the token is then cached. Without those .env values the bot just logs
+  # "needs ... in .env" and goes on without it. Each tool costs prompt space on every turn, so only the useful ones.
+  google:
+    command: uvx
+    args: [workspace-mcp, --tools, gmail, calendar, drive, docs, --read-only]
+    env:
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID}
+      GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET}
+      USER_GOOGLE_EMAIL: ${USER_GOOGLE_EMAIL}
+      OAUTHLIB_INSECURE_TRANSPORT: "1"
+    tools:
+      - search_gmail_messages
+      - get_gmail_message_content
+      - get_gmail_thread_content
+      - list_calendars
+      - get_events
+      - search_drive_files
+      - get_drive_file_content
+      - get_doc_content
+
   # Time zones and conversions (needs uv).
   # time:
   #   command: uvx

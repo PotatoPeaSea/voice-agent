@@ -135,6 +135,10 @@ More direct tools for the voice model, each switchable in `.env`:
   restart, so capped at 24 h.
 - **`memory_search`, `memory_remember`** (`MEMORY_URL`): long-term memory shared with your Claude agents and Hermes. See
   [docs/MEMORY.md](docs/MEMORY.md).
+- **Google Workspace** (MCP server `google` in `config/mcp.yaml`): read-only Gmail search/read, Calendar events, Drive
+  search/read and Docs. Create a "Desktop app" OAuth client in your Google Cloud project (enable the Gmail, Calendar,
+  Drive and Docs APIs, add yourself as a test user), put `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET` and
+  `USER_GOOGLE_EMAIL` in `.env`, then run `npm run google:auth` once to approve it in your browser.
 
 ## Claude Code agents (ACP)
 The voice model can hand work to Claude Code through the [Agent Client Protocol](https://agentclientprotocol.com)

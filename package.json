@@ -17,6 +17,7 @@
     "agent:smoke": "tsx src/tools/agent-smoke.ts",
     "spike": "tsx src/spike/m0-voice.ts",
     "channels": "tsx src/spike/list-channels.ts",
+    "google:auth": "tsx src/tools/google-auth.ts",
     "deps:report": "tsx src/spike/deps-report.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
