@@ -12,6 +12,7 @@ import { QuickAgent } from "./quick-agent.js";
 import type { MemoryClient } from "../memory/client.js";
 import { DiscordTools, type DiscordGateway } from "./discord-tools.js";
 import { MemoryTools } from "./memory-tools.js";
+import { ReminderTools } from "./reminder-tools.js";
 import { detectShell, ShellTools } from "./shell-tools.js";
 import { TaskTools } from "./tools.js";
 import { combineTools, type ToolSet } from "./toolset.js";
@@ -57,8 +58,10 @@ export function makeToolbox(deps: ToolboxDeps) {
   // The quick agent needs a few LLM rounds, so waiting for it would only be silence: background it at once.
   // Commands may run long; they continue in the background like any slow lookup.
   const shell = env.SHELL_ENABLED ? new ShellTools({ workspace, shell: detectShell(env.SHELL_PATH), log }) : undefined;
+  const reminders = new ReminderTools(log);
   const tools = combineTools(
     new TaskTools(registry, workers, roots),
+    reminders,
     new FolderTools(workspace, { write: env.FILE_WRITE_ENABLED }),
     music,
     jobs.wrap(lookups),
@@ -67,5 +70,5 @@ export function makeToolbox(deps: ToolboxDeps) {
     ...(deps.memory ? [new MemoryTools(deps.memory)] : []),
     ...(deps.discord ? [jobs.wrap(new DiscordTools(deps.discord, log))] : []),
   );
-  return { tools, jobs, mcp, fileRoots };
+  return { tools, jobs, mcp, fileRoots, reminders };
 }

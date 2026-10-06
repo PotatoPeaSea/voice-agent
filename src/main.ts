@@ -69,7 +69,7 @@ const memory = env.MEMORY_URL
   ? new MemoryClient({ url: env.MEMORY_URL, apiKey: env.MEMORY_API_KEY, agentId: env.MEMORY_AGENT_ID, log })
   : undefined;
 if (memory) void memory.healthy().then((ok) => log(ok ? `memory: connected to ${env.MEMORY_URL}` : `memory: ${env.MEMORY_URL} isn't answering yet; will keep trying`));
-const { tools, jobs, mcp, fileRoots } = makeToolbox({
+const { tools, jobs, mcp, fileRoots, reminders } = makeToolbox({
   env,
   chat,
   registry,
@@ -445,6 +445,7 @@ async function shutdown(): Promise<void> {
   shuttingDown = true;
   registry.save();
   for (const worker of workers) worker.shutdown();
+  reminders.dispose();
   await Promise.all([leaveNow("shutting down"), mcp.close()]);
   await new Promise((r) => setTimeout(r, 500)); // let the leave go out before the gateway closes
   await client.destroy();
