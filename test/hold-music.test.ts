@@ -58,6 +58,36 @@ function setup(opts: { hasMusic?: boolean } = {}) {
 }
 
 describe("HoldMusic", () => {
+  it("mute() stops playing hold music and keeps it off until the agents finish", () => {
+    const { speaker, state, music } = setup();
+    state.tasks = 1;
+    music.check(0);
+    music.check(5_000);
+    expect(music.isPlaying).toBe(true);
+
+    expect(music.mute()).toBe(true); // the user said "stop the music"
+    expect(speaker.background).toBe(false);
+    music.check(6_000);
+    music.check(60_000);
+    expect(music.isPlaying).toBe(false); // still working, still quiet, but muted
+
+    state.tasks = 0; // agents report back
+    music.check(61_000);
+    state.tasks = 1; // the next task gets hold music again
+    music.check(62_000);
+    music.check(67_000);
+    expect(music.isPlaying).toBe(true);
+  });
+
+  it("mute() with nothing playing still keeps it from starting, and says it wasn't playing", () => {
+    const { state, music } = setup();
+    state.tasks = 1;
+    expect(music.mute()).toBe(false);
+    music.check(0);
+    music.check(10_000);
+    expect(music.isPlaying).toBe(false);
+  });
+
   it("starts after the delay once a task is dispatched and the call is quiet, and stops when it reports", () => {
     const { speaker, state, music, aborted } = setup();
     music.check(0);

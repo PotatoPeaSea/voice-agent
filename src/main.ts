@@ -61,7 +61,7 @@ const workers = makeWorkers(env, registry, log);
 /** Songs for play_music, and (with MUSIC_ENABLED) hold music, from the same folder. */
 const library = new MusicLibrary(env.MUSIC_PATH, env.MUSIC_VOLUME, log);
 const music = env.MUSIC_ENABLED ? library : undefined;
-const musicTools = new MusicTools({ library, jukebox: () => call?.jukebox });
+const musicTools = new MusicTools({ library, jukebox: () => call?.jukebox, holdMusic: () => call?.holdMusic });
 const { tools, jobs, mcp, fileRoots } = makeToolbox({
   env,
   chat,

@@ -153,6 +153,24 @@ describe("Jukebox", () => {
 });
 
 describe("music tools", () => {
+  it("stop_music also stops the hold music that plays while agents work", () => {
+    const { jukebox } = setup();
+    let hold: "playing" | "muted" | "idle" = "playing";
+    const tools = new MusicTools({
+      library: { tracks: () => SONGS },
+      jukebox: () => jukebox,
+      holdMusic: () => ({ mute: () => ((hold === "playing" ? (hold = "muted", true) : (hold = "muted", false))) }),
+    });
+    expect(tools.execute("stop_music", "{}")).toMatchObject({ ok: true, stopped: "hold music" });
+    expect(hold).toBe("muted");
+    // Nothing playing at all: still muted for next time, and says so.
+    expect(tools.execute("stop_music", "{}")).toMatchObject({ ok: true, note: "No music was playing." });
+    // A requested song and hold music together: both stop, the song is named.
+    tools.execute("play_music", '{"song":"moonlight"}');
+    hold = "playing";
+    expect(tools.execute("stop_music", "{}")).toMatchObject({ ok: true, stopped: "moonlight", also_stopped: "hold music" });
+  });
+
   it("lists and searches songs", () => {
     const { tools } = setup();
     expect(tools.execute("list_songs", "")).toEqual({ songs: SONGS.map(songTitle) });

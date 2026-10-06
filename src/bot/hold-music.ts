@@ -36,6 +36,8 @@ export interface HoldMusicDeps {
 export class HoldMusic {
   private quietSince?: number;
   private playing?: AbortController;
+  /** The user asked for music to stop: keep it off until the agents that were working have finished. */
+  private muted = false;
   private readonly timer?: NodeJS.Timeout;
 
   constructor(private readonly deps: HoldMusicDeps, checkMs: number | false = CHECK_MS) {
@@ -48,6 +50,7 @@ export class HoldMusic {
 
   check(now = Date.now()): void {
     const { speaker } = this.deps;
+    if (this.muted && !this.deps.waiting()) this.muted = false;
     if (this.playing && !speaker.isPlayingBackground) {
       // Replaced by speech or ran out of tracks; wait for a fresh quiet spell.
       this.playing.abort();
@@ -59,7 +62,7 @@ export class HoldMusic {
       else if (this.deps.conversing()) this.stop("conversation");
       return;
     }
-    if (!this.deps.waiting() || !this.deps.quiet() || speaker.isSpeaking) {
+    if (this.muted || !this.deps.waiting() || !this.deps.quiet() || speaker.isSpeaking) {
       this.quietSince = undefined;
       return;
     }
@@ -74,6 +77,18 @@ export class HoldMusic {
     this.playing = controller;
     this.deps.log("hold music: playing while agents work");
     speaker.playBackground(music);
+  }
+
+  /**
+   * The user wants the music off ("stop the music", "skip it"): stop it and keep it off until the
+   * agents now working are done. Returns whether it was playing.
+   */
+  mute(): boolean {
+    const wasPlaying = !!this.playing;
+    this.muted = true;
+    this.quietSince = undefined;
+    if (this.playing) this.stop("asked to");
+    return wasPlaying;
   }
 
   /** Someone started a turn or something is about to be said: stop now and restart the wait. */

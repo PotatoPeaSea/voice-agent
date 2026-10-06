@@ -1,6 +1,7 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { MusicLibrary } from "../audio/music.js";
 import { matchSongs, songTitle } from "../audio/songs.js";
+import type { HoldMusic } from "../bot/hold-music.js";
 import type { Jukebox } from "../bot/jukebox.js";
 
 export const MUSIC_TOOL_DEFINITIONS: ChatCompletionTool[] = [
@@ -35,7 +36,9 @@ export const MUSIC_TOOL_DEFINITIONS: ChatCompletionTool[] = [
     type: "function",
     function: {
       name: "stop_music",
-      description: "Stop the song that's playing (when the user says stop, turn it off, enough music...).",
+      description:
+        "Stop the music (when the user says stop, skip it, turn it off, enough music...). Stops a song they asked for and also the " +
+        "hold music that plays by itself while agents work and nobody is talking; hold music stays off until those agents finish.",
       parameters: { type: "object", properties: {} },
     },
   },
@@ -47,6 +50,8 @@ export interface MusicToolsDeps {
   library: Pick<MusicLibrary, "tracks">;
   /** The current call's jukebox; undefined when not in a voice channel. */
   jukebox: () => Jukebox | undefined;
+  /** The current call's hold music (plays by itself while agents work); undefined when there is none. */
+  holdMusic?: () => Pick<HoldMusic, "mute"> | undefined;
 }
 
 /** Executes the front model's music tool calls: songs from the music folder, played into the call. */
@@ -64,7 +69,7 @@ export class MusicTools {
     try {
       args = rawArgs.trim() ? JSON.parse(rawArgs) : {};
     } catch {
-      return { error: `arguments were not valid JSON: ${rawArgs}` };
+      return { error: `arguments were not valid JSON: ${rawArgs.slice(0, 120)}${rawArgs.length > 120 ? "…" : ""}` };
     }
     const songs = this.deps.library.tracks();
     const nowPlaying = this.deps.jukebox()?.current;
@@ -91,8 +96,10 @@ export class MusicTools {
         return { ok: true, playing: title, ...(match && match.score < 1 ? { matched: wanted } : {}), note: "Starts when you finish speaking." };
       }
       case "stop_music": {
-        const stopped = this.deps.jukebox()?.stop();
-        return stopped ? { ok: true, stopped } : { ok: true, note: "No music was playing." };
+        const song = this.deps.jukebox()?.stop();
+        const hold = this.deps.holdMusic?.()?.mute() ? "hold music" : undefined;
+        if (song) return { ok: true, stopped: song, ...(hold ? { also_stopped: hold } : {}) };
+        return hold ? { ok: true, stopped: hold } : { ok: true, note: "No music was playing." };
       }
       default:
         return { error: `unknown tool ${name}` };
