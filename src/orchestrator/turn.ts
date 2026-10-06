@@ -6,6 +6,10 @@ import { errorMessage } from "./toolset.js";
 
 const MAX_TOOL_ROUNDS = 5;
 
+const TRUNCATED_CALL_ERROR =
+  "Your reply hit the output length limit while writing this tool call, so its arguments were cut off and nothing ran. " +
+  "Call it again with much shorter arguments: only the essentials, no background or restated context.";
+
 export interface TurnTools {
   definitions: ChatCompletionTool[];
   /** A result or a promise of one. */
@@ -37,6 +41,7 @@ export async function* assistantTurn(opts: TurnOptions): AsyncIterable<string> {
   for (let round = 0; round < (opts.maxRounds ?? MAX_TOOL_ROUNDS); round++) {
     let text = "";
     let calls: { id: string; name: string; arguments: string }[] = [];
+    let truncated = false;
     const messages: ChatMessage[] = [{ role: "system", content: opts.system ?? activeSystemPrompt() }, ...history];
     for await (const event of chat.streamWithTools(messages, tools?.definitions ?? [], signal)) {
       if (event.type === "text") {
@@ -44,11 +49,25 @@ export async function* assistantTurn(opts: TurnOptions): AsyncIterable<string> {
         yield event.text;
       } else {
         calls = event.calls;
+        truncated = !!event.truncated;
       }
     }
     if (!calls.length) {
       opts.onFinal(text.trim());
       return;
+    }
+    if (truncated) {
+      // Cut off at the token cap: the arguments are broken JSON, so running them would only fail. Keep the
+      // broken text out of the history (it'd cost context every turn) and tell the model what happened.
+      log(`tool call(s) cut off at the token limit: ${calls.map((c) => c.name).join(", ")}`);
+      history.push({
+        role: "assistant",
+        content: text || null,
+        tool_calls: calls.map((c) => ({ id: c.id, type: "function", function: { name: c.name, arguments: "{}" } })),
+      });
+      for (const call of calls) history.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify({ error: TRUNCATED_CALL_ERROR }) });
+      if (text && !/[.!?]\s*$/.test(text)) yield ". ";
+      continue;
     }
     // An assistant tool_calls message must be followed by a result for every call.
     history.push({

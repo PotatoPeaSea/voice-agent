@@ -70,6 +70,11 @@ const EnvSchema = z.object({
   LLM_MODEL: z.string().default("deepseek-flash"),
   /** Reasoning adds seconds of latency; keep it off for the conversational front model. */
   LLM_THINKING: flag,
+  /**
+   * Cap on one model reply, spoken text and tool-call arguments together. Too low and a long
+   * dispatch_task brief is cut off mid-JSON and fails; spoken replies stay short because the prompt says so.
+   */
+  LLM_MAX_TOKENS: numberWithDefault(4096, 200, 32000),
 
   STT_PROVIDER: z.string().default("deepgram-flux"),
   DEEPGRAM_API_KEY: optional,

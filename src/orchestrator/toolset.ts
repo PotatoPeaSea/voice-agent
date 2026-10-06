@@ -33,9 +33,9 @@ export function toolName(tool: ChatCompletionTool): string {
 export function parseArgs(raw: string): Record<string, unknown> | string {
   try {
     const args: unknown = raw.trim() ? JSON.parse(raw) : {};
-    return args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : `arguments must be an object: ${raw}`;
+    return args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : `arguments must be an object: ${raw.slice(0, 120)}`;
   } catch {
-    return `arguments were not valid JSON: ${raw}`;
+    return `arguments were not valid JSON: ${raw.slice(0, 120)}${raw.length > 120 ? "…" : ""}`;
   }
 }
 

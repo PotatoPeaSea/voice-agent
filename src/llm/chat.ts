@@ -10,7 +10,10 @@ export interface ToolCall {
   arguments: string;
 }
 
-export type ChatEvent = { type: "text"; text: string } | { type: "tool_calls"; calls: ToolCall[] };
+export type ChatEvent =
+  | { type: "text"; text: string }
+  /** `truncated`: the reply hit the token cap, so the last call's arguments are cut off mid-string. */
+  | { type: "tool_calls"; calls: ToolCall[]; truncated?: boolean };
 
 /**
  * Streaming chat against any OpenAI-compatible endpoint (DeepSeek by default).
@@ -41,7 +44,7 @@ export class ChatModel {
         model: this.env.LLM_MODEL,
         messages,
         stream: true,
-        max_tokens: 800,
+        max_tokens: this.env.LLM_MAX_TOKENS,
         temperature: 0.7,
         ...(tools.length ? { tools } : {}),
         // DeepSeek extension; other providers ignore unknown fields.
@@ -50,7 +53,9 @@ export class ChatModel {
       { signal },
     );
     const calls: ToolCall[] = [];
+    let finishReason: string | null | undefined;
     for await (const chunk of stream) {
+      finishReason = chunk.choices[0]?.finish_reason ?? finishReason;
       const delta = chunk.choices[0]?.delta;
       if (delta?.content) yield { type: "text", text: delta.content };
       for (const part of delta?.tool_calls ?? []) {
@@ -61,6 +66,6 @@ export class ChatModel {
       }
     }
     const complete = calls.filter(Boolean);
-    if (complete.length) yield { type: "tool_calls", calls: complete };
+    if (complete.length) yield { type: "tool_calls", calls: complete, ...(finishReason === "length" ? { truncated: true } : {}) };
   }
 }

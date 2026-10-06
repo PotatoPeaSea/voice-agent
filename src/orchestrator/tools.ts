@@ -231,7 +231,7 @@ export class TaskTools {
     try {
       args = rawArgs.trim() ? JSON.parse(rawArgs) : {};
     } catch {
-      return { error: `arguments were not valid JSON: ${rawArgs}` };
+      return { error: `arguments were not valid JSON: ${rawArgs.slice(0, 120)}${rawArgs.length > 120 ? "…" : ""}` };
     }
     try {
       switch (name) {
