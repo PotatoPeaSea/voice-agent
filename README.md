@@ -117,6 +117,25 @@ Exa's free, keyless web search (`web_search_exa`, `web_fetch_exa`). Add local se
 agents' permission prompts. Tools a server doesn't mark read-only are described to the model as "Takes action:
 confirm with the user first". `${VAR}` in the file is filled from `.env`. The startup log shows each server's tools.
 
+## Shell, Discord, reminders and shared memory
+More direct tools for the voice model, each switchable in `.env`:
+
+- **`run_command`** (`SHELL_ENABLED`, `SHELL_PATH`): runs a command on your computer in Git Bash (PowerShell if Git isn't
+  installed). Commands that only look (`ls`, `cat`, `grep`, `git status/log/diff`, `ps`, `df`, `find`...) run at once.
+  Anything else comes back needing confirmation and runs only after you say yes in a **later** reply; that's enforced in code
+  (`src/orchestrator/confirm.ts`), so text in a web page or file can't make the model approve its own command. Recursive
+  deletes of root/home, disk and power commands, download-and-run, and anything naming credential files or key folders are
+  refused outright. Commands get a scrubbed environment (the bot's tokens aren't passed), no stdin, a 100 s limit that kills
+  the whole process tree, and clipped output; slow ones finish in the background like any lookup.
+- **`discord_channels`, `discord_read`, `discord_send`** (`DISCORD_TOOLS_ENABLED`): catch up on a channel of the bot's server,
+  or post to one (only after you say yes; mentions never ping). Uses the voice bot's own connection, like Hermes's built-in
+  Discord tool. Needs View Channel and Read Message History, and the Message Content intent switched on in the developer
+  portal to see what people wrote.
+- **`set_reminder`, `list_reminders`, `cancel_reminder`**: "remind me in 20 minutes" / "at 17:00". In memory only: lost on
+  restart, so capped at 24 h.
+- **`memory_search`, `memory_remember`** (`MEMORY_URL`): long-term memory shared with your Claude agents and Hermes. See
+  [docs/MEMORY.md](docs/MEMORY.md).
+
 ## Claude Code agents (ACP)
 The voice model can hand work to Claude Code through the [Agent Client Protocol](https://agentclientprotocol.com)
 (`@agentclientprotocol/claude-agent-acp`). It uses your existing Claude Code login.
