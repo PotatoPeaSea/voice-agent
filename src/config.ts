@@ -101,6 +101,11 @@ const EnvSchema = z.object({
    */
   TOOL_WAIT_SECONDS: numberWithDefault(3, 0, 60),
   /**
+   * Give quick_agent a run_script tool: it writes one short JavaScript script that calls several read-only lookups
+   * in a WebAssembly sandbox (no files, network or processes beyond those tools) and gets back only the script's result.
+   */
+  CODE_MODE_ENABLED: flagDefaultOn,
+  /**
    * Let the voice model run shell commands itself (run_command): read-only ones at once, anything else only after you
    * say yes in a later reply. Credential files are off limits and the bot's own tokens aren't passed to commands.
    */

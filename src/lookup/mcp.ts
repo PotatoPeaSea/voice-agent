@@ -25,6 +25,11 @@ const ServerSchema = z
     headers: z.record(z.string(), z.string()).default({}),
     /** Tool names to offer the voice model, or "*" for all of them. */
     tools: z.union([z.literal("*"), z.array(z.string())]),
+    /**
+     * false = keep this server's tools out of the voice model's prompt until it asks for them with find_tools.
+     * quick_agent and run_script always see them.
+     */
+    core: z.boolean().default(true),
     enabled: z.boolean().default(true),
   })
   .refine((s) => !!s.command !== !!s.url, { message: "give either command or url" });
@@ -49,7 +54,13 @@ function interpolateAll(record: Record<string, string>, missing: Set<string>): R
 interface Route {
   server: Server;
   tool: string;
+  def: ChatCompletionTool;
+  /** Not in the voice model's prompt until activated by find_tools. */
+  deferred: boolean;
 }
+
+/** Deferred tools activated at once; the least recently activated drops out beyond this. */
+const MAX_ACTIVE_DEFERRED = 12;
 
 interface Server {
   name: string;
@@ -66,8 +77,9 @@ interface Server {
  */
 export class McpTools implements ToolSet {
   private readonly servers: Server[];
-  private defs: ChatCompletionTool[] = [];
   private readonly routes = new Map<string, Route>();
+  /** Deferred tools find_tools has switched on, oldest first. */
+  private readonly active: string[] = [];
 
   constructor(
     servers: Record<string, McpServerConfig>,
@@ -92,8 +104,60 @@ export class McpTools implements ToolSet {
     return new McpTools(parsed.data.servers ?? {}, log);
   }
 
+  /** What the voice model is offered: the core tools plus any deferred ones it has activated. */
   get definitions(): ChatCompletionTool[] {
-    return this.defs;
+    return [...this.routes.entries()].filter(([name, r]) => !r.deferred || this.active.includes(name)).map(([, r]) => r.def);
+  }
+
+  /** Every tool from every connected server, deferred or not (for quick_agent and run_script). */
+  get catalog(): ChatCompletionTool[] {
+    return [...this.routes.values()].map((r) => r.def);
+  }
+
+  /** The same tools with the whole catalog as definitions. */
+  full(): ToolSet {
+    const mcp = this;
+    return {
+      get definitions() {
+        return mcp.catalog;
+      },
+      handles: (name) => mcp.handles(name),
+      execute: (name, args, ctx) => mcp.execute(name, args, ctx),
+    };
+  }
+
+  /** Servers with tools held back, and how many tools each hides. */
+  get deferredServers(): Map<string, number> {
+    const counts = new Map<string, number>();
+    for (const r of this.routes.values()) if (r.deferred) counts.set(r.server.name, (counts.get(r.server.name) ?? 0) + 1);
+    return counts;
+  }
+
+  /** Deferred tools whose name or description match the words of the query, best first. */
+  search(query: string, limit = 5): { name: string; def: ChatCompletionTool }[] {
+    const words = query.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length > 1);
+    if (!words.length) return [];
+    return [...this.routes.entries()]
+      .filter(([, r]) => r.deferred)
+      .map(([name, r]) => {
+        const nameText = name.toLowerCase().replace(/_/g, " ");
+        const text = `${nameText} ${r.def.type === "function" ? (r.def.function.description ?? "").toLowerCase() : ""}`;
+        const score = words.reduce((sum, w) => sum + (nameText.includes(w) ? 3 : text.includes(w) ? 1 : 0), 0);
+        return { name, def: r.def, score };
+      })
+      .filter((m) => m.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+  }
+
+  /** Offer these deferred tools to the voice model from its next model call on. */
+  activate(names: string[]): void {
+    for (const name of names) {
+      const at = this.active.indexOf(name);
+      if (at >= 0) this.active.splice(at, 1);
+      this.active.push(name);
+    }
+    while (this.active.length > MAX_ACTIVE_DEFERRED) this.active.shift();
   }
 
   handles(name: string): boolean {
@@ -233,12 +297,13 @@ export class McpTools implements ToolSet {
       // Servers declare read-only tools; anything else might change things, so the model should ask first.
       const readOnly = tool.annotations?.readOnlyHint === true;
       const description = `${readOnly ? "" : "(Takes action: confirm with the user first.) "}${tool.description ?? tool.title ?? tool.name}`.trim();
-      this.routes.set(name, { server, tool: tool.name });
-      this.defs = [
-        ...this.defs.filter((d) => d.type !== "function" || d.function.name !== name),
-        { type: "function", function: { name, description: description.slice(0, MAX_DESCRIPTION), parameters } },
-      ];
+      this.routes.set(name, {
+        server,
+        tool: tool.name,
+        deferred: !server.config.core,
+        def: { type: "function", function: { name, description: description.slice(0, MAX_DESCRIPTION), parameters } },
+      });
     }
-    this.log(`mcp ${server.name}: ${offered.length} tool(s) ${offered.map((t) => t.name).join(", ")}`);
+    this.log(`mcp ${server.name}: ${offered.length} tool(s)${server.config.core ? "" : " (deferred)"} ${offered.map((t) => t.name).join(", ")}`);
   }
 }

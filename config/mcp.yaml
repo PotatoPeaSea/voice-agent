@@ -6,6 +6,9 @@
 # the agents' permission prompts. Tools the server doesn't mark read-only are described to the
 # model as "Takes action: confirm with the user first".
 #
+# `core: false` keeps a server's tools out of the voice model's prompt (saving tokens on every turn); it loads them
+# with find_tools when needed, and quick_agent / run_script always have them. Use it for the long tail.
+#
 # Per server: either `command` (+ `args`, `env`, `cwd`) for a local server on stdio, or `url`
 # (+ `headers`) for a remote one over streamable HTTP. `${VAR}` is replaced from .env, so keys
 # stay out of this file. `enabled: false` skips a server. The bot's own .env is NOT passed to
@@ -24,6 +27,7 @@ servers:
   # consent page in your browser); the token is then cached. Without those .env values the bot just logs
   # "needs ... in .env" and goes on without it. Each tool costs prompt space on every turn, so only the useful ones.
   google:
+    core: false
     command: uvx
     args: [workspace-mcp, --tools, gmail, calendar, drive, docs, --read-only]
     env:

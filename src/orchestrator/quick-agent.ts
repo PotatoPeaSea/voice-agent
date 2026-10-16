@@ -1,7 +1,8 @@
 import type { ChatCompletionTool } from "openai/resources/chat/completions";
 import type { ChatMessage, ChatModel } from "../llm/chat.js";
 import type { ToolContext } from "./tools.js";
-import { errorMessage, parseArgs, type ToolSet } from "./toolset.js";
+import type { CodeModeTools } from "./code-mode.js";
+import { combineTools, errorMessage, parseArgs, type ToolSet } from "./toolset.js";
 import { assistantTurn } from "./turn.js";
 
 const MAX_ROUNDS = 8;
@@ -26,14 +27,17 @@ export const QUICK_AGENT_TOOL: ChatCompletionTool = {
   },
 };
 
-function quickAgentPrompt(roots: string[]): string {
+function quickAgentPrompt(roots: string[], codeApi: string): string {
   const now = new Date().toLocaleString("en-US", { dateStyle: "full", timeStyle: "short" });
   return `You are a research helper for a voice assistant. Answer the question using your tools, then reply with only the answer: plain text, 2-6 sentences with the specific facts, names and numbers the assistant should say aloud. No markdown, no URLs unless the question asks for them.
 - Your tools only read. You can't edit files, run commands or send anything; if the question needs that, say so.
 - Call several tools at once when the lookups don't depend on each other.
 - Stop as soon as you can answer. You have at most ${MAX_ROUNDS} rounds of tool calls; answer with what you have before then.
 - If you couldn't find something, say what you checked.
-You can read files under: ${roots.join(", ")}. It is now ${now}.`;
+You can read files under: ${roots.join(", ")}. It is now ${now}.${codeApi ? `
+
+${codeApi}
+Use run_script when you need 3 or more lookups or a loop over results; call a tool directly for one or two.` : ""}`;
 }
 
 export interface QuickAgentDeps {
@@ -41,6 +45,8 @@ export interface QuickAgentDeps {
   /** The read-only lookups it may use (never the task tools or itself). */
   tools: ToolSet;
   roots: string[];
+  /** Offer run_script: model-written scripts that call the lookups inside a sandbox. */
+  codeMode?: CodeModeTools;
   log: (...a: unknown[]) => void;
 }
 
@@ -66,7 +72,8 @@ export class QuickAgent implements ToolSet {
     if (!question) return { error: "question is required" };
 
     const tag = `quick-agent q${this.next++}:`;
-    const { chat, tools, roots, log } = this.deps;
+    const { chat, roots, log, codeMode } = this.deps;
+    const tools = codeMode ? combineTools(this.deps.tools, codeMode) : this.deps.tools;
     const history: ChatMessage[] = [{ role: "user", content: question }];
     let answer = "";
     log(tag, question);
@@ -79,7 +86,7 @@ export class QuickAgent implements ToolSet {
       signal: ctx.signal ?? new AbortController().signal,
       log: (...a) => log(tag, ...a),
       onFinal: (text) => (answer = text),
-      system: quickAgentPrompt(roots),
+      system: quickAgentPrompt(roots, codeMode?.describeApi() ?? ""),
       maxRounds: MAX_ROUNDS,
     });
     for await (const _ of turn);

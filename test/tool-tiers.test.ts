@@ -154,7 +154,7 @@ function makeServer(): McpServer {
 function mcpTools(tools: "*" | string[] = ["lookup", "send", "broken"]) {
   const servers: McpServer[] = [];
   const mcp = new McpTools(
-    { dict: { args: [], env: {}, headers: {}, tools, enabled: true, url: "memory://" } },
+    { dict: { args: [], env: {}, headers: {}, tools, core: true, enabled: true, url: "memory://" } },
     quiet,
     4000,
     () => {

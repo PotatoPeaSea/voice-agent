@@ -8,10 +8,12 @@ Full design: see the plan (architecture, latency budget, milestones). Backlog: [
 ## Status
 - [x] Project skeleton, pluggable STT/TTS interfaces, voice profiles (`config/voices.yaml`)
 - [x] **Milestone 0: live voice receive/playback under DAVE E2EE** — `npm run spike` (verified 2026-09-24)
-- [ ] **Milestone 1: voice conversation** (STT → LLM → TTS with barge-in) — built, awaiting API keys + live test
+- [x] **Milestone 1: voice conversation** (STT → LLM → TTS with barge-in) — in use with Deepgram, DeepSeek and local Qwen3-TTS
 - [x] **Claude Code agents over ACP**: dispatch, follow-ups, model/effort/mode/fast settings, permission requests by voice, cancel, spoken reports — verified end to end with `npm run chat`
 - [x] **Lookups without an agent**: direct file/git/web (MCP) tools, a background `quick_agent`, slow lookups reported as automatic updates — verified live against DeepSeek + Exa
-- [ ] Hermes worker · Discord text reports · hardening + Linux (see docs/IMPROVEMENTS.md)
+- [x] Hermes worker (off by default), Discord text reports, tasks that survive restarts, shell/Discord/reminder/memory/Google tools
+- [x] **Code mode** (`run_script` in `quick_agent`) and **tool search** (`find_tools`, `core: false` MCP servers) — first versions; not yet tried live with a real model
+- [ ] Next: dashboard / desktop app, phone client, local STT, multi-user, speech-to-speech (see docs/IMPROVEMENTS.md)
 
 ## Setup
 Requires Node 22+ and ffmpeg on PATH.
@@ -96,6 +98,11 @@ Questions that only need reading don't go to an agent. The voice model has three
 2. **`quick_agent`**, for questions that need several lookups: a short tool loop with the same LLM and the same
    read-only tools, run inside the bot. "Research Proxmox vs TrueNAS for a home server." It always runs in the
    background: the bot says it'll get back to you and speaks the answer when it's ready (typically 5-20 s).
+   With `CODE_MODE_ENABLED` (default on) it also has **`run_script`**: instead of one tool call per step it writes a
+   short JavaScript function that calls several lookups (`await tools.web_search_exa({...})`, `Promise.all`, loops)
+   and gets back only what the script returns, so bulky search pages and file contents stay out of its context. The
+   script runs in a QuickJS WebAssembly sandbox with no files, network, processes or timers, a memory cap, a 60 s
+   limit and at most 25 tool calls; tools marked "Takes action" aren't available to it.
 3. **`dispatch_task`** (below), only for work that changes things or runs long.
 
 A lookup still running after `TOOL_WAIT_SECONDS` (default 3) carries on in the background the same way, and hold
@@ -116,6 +123,11 @@ Exa's free, keyless web search (`web_search_exa`, `web_fetch_exa`). Add local se
 (`url`), and list only the tools you want: every tool costs prompt space on every turn, and these run without the
 agents' permission prompts. Tools a server doesn't mark read-only are described to the model as "Takes action:
 confirm with the user first". `${VAR}` in the file is filled from `.env`. The startup log shows each server's tools.
+
+To add many tools without slowing every turn, mark a server `core: false`: its tools stay out of the voice model's
+prompt, which gets a `find_tools(query)` tool instead. Calling it matches the held-back tools by name and description
+and loads them for the next calls (up to 12 at a time). `quick_agent` and `run_script` always see every tool, so
+"check my calendar and email" is one hand-off. The shipped Google server is `core: false`.
 
 ## Shell, Discord, reminders and shared memory
 More direct tools for the voice model, each switchable in `.env`:

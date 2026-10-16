@@ -1,36 +1,35 @@
 # Improvements backlog
 
-Ordered by priority. Pick from the top.
+Ordered by priority. Pick from the top. Items 6 and 7 are larger product directions; sequence them with the user.
 
-## 1. Sandboxed code-mode tool calling (next)
-Today every lookup costs one LLM round trip per step: the front model (or `quick_agent`) calls a tool, waits,
-reads the result, calls the next. With code mode the model instead writes one short script that calls several
-tools (loops, filters, joins results) and only the script's final output comes back, cutting round trips and
-keeping bulky intermediate results (search pages, file contents) out of the context.
-- Run the script in a real sandbox: no filesystem, network or process access except through the tool functions
-  it's handed (the lookup tools in `src/orchestrator/lookup-tools.ts` and the MCP tools in `src/lookup/mcp.ts`).
-  Candidates: a V8 isolate (`isolated-vm`), a QuickJS/WASM runtime, or Deno with all permissions denied.
-  Plain `node:vm` is not a sandbox.
-- CPU/memory/time limits and a cap on tool calls per script; the script's output goes through the same
-  truncation as tool results.
-- Expose it as a mode of `quick_agent` first (it already runs in the background), then consider it for the
-  front model.
-- Only read-only tools inside the sandbox; anything marked "Takes action" stays a direct, confirmed tool call.
+## 1. Sandboxed code-mode tool calling (first version done, in `quick_agent`)
+Done: `quick_agent` has a `run_script` tool (`src/orchestrator/code-mode.ts`). The model writes the body of an async
+JavaScript function that calls the read-only lookups (`await tools.name({...})`, `Promise.all`, loops) and gets back only
+the script's return value. It runs in a QuickJS WebAssembly VM (`src/sandbox/script.ts`, `quickjs-emscripten`): no
+filesystem, network, process, timers or imports, a 32 MB memory cap, a 60 s time limit (guest loops are interrupted),
+25 tool calls per script and output cut to 6000 characters. Tools marked "Takes action" are not callable from scripts.
+`CODE_MODE_ENABLED=false` turns it off.
+Still to do:
+- Not yet verified live against a real model: check that DeepSeek writes working scripts and that it picks `run_script`
+  only for 3+ lookups. Tune the prompt in `quick-agent.ts` / the tool description from real transcripts.
+- Offer it to the front model too, once it is proven in `quick_agent`.
+- Let scripts use the deferred tools of item 2 without their schemas in the prompt (done for `core: false` servers via the
+  catalog; check it with a real server).
 
-## 2. Many more tools for the front model, without bloating every turn
-Give the voice model far more capabilities while keeping it sharp. Small models pick worse from long lists, and
-every tool's description is sent on every turn (latency), so growth needs a scaling strategy, not just more entries.
-- More MCP servers in `config/mcp.yaml` (no code): the commented-out time server, Home Assistant, Spotify, GitHub,
-  Google Calendar/Gmail, a memory/notes server, Playwright. Try with `tools: "*"`, then trim to what's used.
-- Native `ToolSet`s (`src/orchestrator/toolset.ts`, combined in `src/orchestrator/toolbox.ts`) for bot-only
-  abilities: post to a Discord text channel, move users between channels, reminders that speak up later,
-  switching voice/TTS mid-call. `music-tools.ts` is the smallest template.
-- Tool search: a small always-on core set, everything else in a catalog behind one `find_tools(query)` tool that
-  activates matches for the rest of the session. E.g. a per-server `core: false` flag in `mcp.yaml` to defer a
-  whole server.
-- Push the long tail down a tier: `quick_agent` gets the full catalog, the front model only the core set and hands
-  off ("do something with my calendar") in one call; the quick agent already runs in the background.
-- Code mode (item 1) composes with this: scripts can call deferred tools without their schemas in the prompt.
+## 2. Many more tools for the front model, without bloating every turn (first version done)
+Done:
+- Tool search: a `core: false` flag per MCP server in `config/mcp.yaml` keeps its tools out of the voice model's prompt.
+  `find_tools(query)` (`src/orchestrator/find-tools.ts`) matches the held-back tools, switches them on for the next calls
+  (at most 12 active, oldest drop out) and is itself offered only while something is held back. The Google server is
+  `core: false` now.
+- `quick_agent` and `run_script` always get the whole catalog, so "do something with my calendar" costs the front model
+  one call.
+Still to do:
+- Add more servers to `config/mcp.yaml` (no code): the commented-out time server, Home Assistant, Spotify, GitHub,
+  a notes server, Playwright. Try with `tools: "*"` and `core: false`, then trim to what is used.
+- Native `ToolSet`s for more bot-only abilities (`music-tools.ts` is the smallest template): move users between
+  channels, switch voice/TTS mid-call.
+- Search is plain keyword matching on names and descriptions; if it misses, add synonyms or an embedding lookup.
 - MCP tools bypass the agents' permission prompts; the only guard on action tools is the "confirm with the user
   first" description. Keep high-impact actions (sending email, deleting files) behind an agent or an explicit
   confirmation step.
@@ -44,6 +43,32 @@ keeping the same tool set.
 
 ## 5. Multi-user support
 Per-user conversation state, allowlists and project roots.
+
+## 6. A dashboard to run and manage it, ideally a desktop app
+Today everything is started and managed from the command line with `npm run ...` (`start`, `tts`, `check`, `voices`,
+`clone-voice`, `google:auth`, ...), plus the TTS service, `.env` and the YAML files edited by hand. That is not friendly.
+Build a proper dashboard, preferably a desktop application (Electron or Tauri):
+- Start, stop and restart the bot and the TTS service, with live logs and status (connected, which voice, GPU/CPU, MCP
+  servers up or failed, running agent tasks and background jobs).
+- Edit settings in a form instead of `.env` / `config/*.yaml` (keys stay in the OS credential store or a protected file);
+  manage voices (listing, cloning, picking the default), MCP servers and their tools (including `core`), prompts, and
+  the allowed users and folders.
+- Walk through one-time setup: Discord bot token and channel, API keys, Google authorization, a first test call.
+- Show tasks, reports, reminders and shared memory, and let you cancel or answer an agent's permission request.
+- The bot should run as a background service the dashboard talks to (local HTTP/WebSocket API), so closing the window
+  does not hang up the call.
+
+## 7. More than Discord: a phone app you tap to start talking, like Siri but better
+Discord should be one front end, not the only one. Move the voice pipeline behind a transport interface (audio in,
+audio out, a way to be notified) so other clients can use the same orchestrator, tools, agents and memory:
+- A mobile app (iOS and Android; or a PWA first) with a big button: press and start talking, no Discord and no
+  joining a channel. Streams the microphone to the bot over WebRTC or a WebSocket and plays the reply, with barge-in.
+- It has to work away from the home network (Tailscale, or a small authenticated relay), and wake from a lock-screen
+  widget, a shortcut or the side button the way Siri does.
+- "Better than Siri": the same assistant as the Discord one (your tools, memory, coding agents, reminders), a persistent
+  conversation across devices, and push notifications for finished agent tasks and reminders.
+- Other transports follow the same shape: a desktop push-to-talk hotkey, a phone call (SIP), a smart speaker.
+- Needs per-user state first (item 5), since a phone client and a Discord client are two sessions of one person.
 
 ## Done
 - Hermes Agent worker adapter (`src/workers/hermes-acp.ts`), chosen per task via `dispatch_task`'s `worker`.

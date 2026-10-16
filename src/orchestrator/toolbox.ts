@@ -10,7 +10,9 @@ import { BackgroundJobs } from "./background.js";
 import { FolderTools, LookupTools } from "./lookup-tools.js";
 import { QuickAgent } from "./quick-agent.js";
 import type { MemoryClient } from "../memory/client.js";
+import { CodeModeTools } from "./code-mode.js";
 import { DiscordTools, type DiscordGateway } from "./discord-tools.js";
+import { FindTools } from "./find-tools.js";
 import { MemoryTools } from "./memory-tools.js";
 import { ReminderTools } from "./reminder-tools.js";
 import { detectShell, ShellTools } from "./shell-tools.js";
@@ -52,8 +54,11 @@ export function makeToolbox(deps: ToolboxDeps) {
   // The voice model's own file tools reach further than the agents: FILE_ROOTS, or the agent roots plus home.
   const fileRoots = [...new Set((env.FILE_ROOTS ?? [...roots, homedir()]).map((r) => resolve(r)))];
   const workspace = new Workspace(fileRoots);
+  // The front model sees the core MCP tools (plus any it finds); quick_agent and run_script get the whole catalog.
   const lookups = combineTools(new LookupTools(workspace), mcp);
-  const quickAgent = new QuickAgent({ chat, tools: lookups, roots: fileRoots, log });
+  const allLookups = combineTools(new LookupTools(workspace), mcp.full());
+  const codeMode = env.CODE_MODE_ENABLED ? new CodeModeTools(allLookups, log) : undefined;
+  const quickAgent = new QuickAgent({ chat, tools: allLookups, roots: fileRoots, codeMode, log });
   const jobs = new BackgroundJobs({ waitMs: env.TOOL_WAIT_SECONDS * 1000, timeoutMs: JOB_TIMEOUT_MS, log, onFinish: deps.onJobFinish });
   // The quick agent needs a few LLM rounds, so waiting for it would only be silence: background it at once.
   // Commands may run long; they continue in the background like any slow lookup.
@@ -64,6 +69,7 @@ export function makeToolbox(deps: ToolboxDeps) {
     reminders,
     new FolderTools(workspace, { write: env.FILE_WRITE_ENABLED }),
     music,
+    new FindTools(mcp),
     jobs.wrap(lookups),
     jobs.wrap(quickAgent, 0),
     ...(shell ? [jobs.wrap(shell)] : []),
