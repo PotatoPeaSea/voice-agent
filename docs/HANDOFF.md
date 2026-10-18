@@ -22,6 +22,10 @@ Known loose ends:
 - Reminders live in memory only and are lost on restart.
 - Every task is visible to every user (`list_tasks`), and task notices go to whoever spoke last (item 5, multi-user).
 
+Design direction: see [AGENT-HARNESS-STUDY.md](AGENT-HARNESS-STUDY.md) (what Hermes Agent and OpenClaw do, and the order to copy it).
+The GitHub, Spotify and Obsidian MCP servers are in `config/mcp.yaml` (GitHub needs `GITHUB_TOKEN`, Spotify needs
+`SPOTIFY_CLIENT_ID` and a one-time login); `npm run mcp:probe -- <command|url>` lists a server's tools.
+
 ## Architecture map
 
 - **`src/main.ts`**: entry point. Builds the toolbox, the task registry and workers, joins the voice channel, creates a

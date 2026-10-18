@@ -1,6 +1,7 @@
 # Improvements backlog
 
-Ordered by priority. Pick from the top. Items 6 and 7 are larger product directions; sequence them with the user.
+Ordered by priority. Pick from the top. [AGENT-HARNESS-STUDY.md](AGENT-HARNESS-STUDY.md) compares us with Hermes Agent and OpenClaw and proposes
+items 8-11 below. Items 6 and 7 are larger product directions; sequence them with the user.
 
 ## 1. Sandboxed code-mode tool calling (first version done, in `quick_agent`)
 Done: `quick_agent` has a `run_script` tool (`src/orchestrator/code-mode.ts`). The model writes the body of an async
@@ -69,6 +70,22 @@ audio out, a way to be notified) so other clients can use the same orchestrator,
   conversation across devices, and push notifications for finished agent tasks and reminders.
 - Other transports follow the same shape: a desktop push-to-talk hotkey, a phone call (SIP), a smart speaker.
 - Needs per-user state first (item 5), since a phone client and a Discord client are two sessions of one person.
+
+## 8. Skills: markdown instruction files loaded on demand
+`skills/<name>/SKILL.md` with name + description frontmatter; a compact catalog in the prompt, a `read_skill` tool for the body.
+Move `AGENT_RULES` and grill-me out of the every-turn prompt first. Later: model-authored skills with undo. (Study, section 2.)
+
+## 9. Cache-stable tool search
+`find_tools` currently adds tools mid-conversation, which changes the prompt prefix and defeats the provider's cache. Return the
+matched schemas as the result and add a fixed `call_tool(name, args)` instead. (Study, section 1.)
+
+## 10. Persistent jobs, cron and a heartbeat
+Replace in-memory reminders with a job store (recurring, catch-up, time limit, delivery target), then a cheap-model heartbeat with
+`NO_REPLY` suppression and active hours. (Study, section 3.)
+
+## 11. Context compaction with a memory flush
+Replace `trimHistory(40)` with a running summary, prune old tool results first, and save what matters to memory before dropping
+anything. (Study, section 4.) Item 5's gateway protocol is described in the study, section 5, and is the base for items 6 and 7.
 
 ## Done
 - Hermes Agent worker adapter (`src/workers/hermes-acp.ts`), chosen per task via `dispatch_task`'s `worker`.
