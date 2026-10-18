@@ -66,6 +66,9 @@ export async function runScript(code: string, call: ScriptToolCaller, limits: Pa
   let toolCalls = 0;
   let finished = false;
   const pending = new Set<Promise<unknown>>();
+  const deferreds = new Set<{ dispose(): void; alive: boolean }>();
+  let settledHandle: QuickJSHandle | undefined;
+  let promiseHandle: QuickJSHandle | undefined;
 
   const fail = (message: string): ScriptResult => ({ error: message, toolCalls });
   try {
@@ -74,6 +77,7 @@ export async function runScript(code: string, call: ScriptToolCaller, limits: Pa
       const name = vm.getString(nameHandle);
       const rawArgs = vm.getString(argsHandle);
       const promise = vm.newPromise();
+      deferreds.add(promise);
       const settle = async () => {
         try {
           if (++toolCalls > lim.maxToolCalls) throw new Error(`more than ${lim.maxToolCalls} tool calls in one script`);
@@ -101,7 +105,7 @@ export async function runScript(code: string, call: ScriptToolCaller, limits: Pa
 
     const evaluated = vm.evalCode(`(async () => {\n${code}\n})()`, "script.js");
     if (evaluated.error) return fail(describe(vm, evaluated.error));
-    const promiseHandle = evaluated.value;
+    promiseHandle = evaluated.value;
     runtime.executePendingJobs();
 
     let timer: NodeJS.Timeout | undefined;
@@ -112,14 +116,15 @@ export async function runScript(code: string, call: ScriptToolCaller, limits: Pa
     runtime.executePendingJobs();
     const settled = await Promise.race([resolving, timedOut, aborted]);
     clearTimeout(timer);
-    promiseHandle.dispose();
     if (settled === "timeout") return fail(`script timed out after ${lim.timeoutMs / 1000}s`);
     if (settled === "abort") return fail("cancelled");
     if (settled.error) return fail(describe(vm, settled.error));
 
-    const value = vm.dump(settled.value);
-    settled.value.dispose();
-    const logs = vm.dump(vm.getProp(vm.global, "__logs")) as string[];
+    settledHandle = settled.value;
+    const value = vm.dump(settledHandle);
+    const logsHandle = vm.getProp(vm.global, "__logs");
+    const logs = vm.dump(logsHandle) as string[];
+    logsHandle.dispose();
     const output = value === undefined ? undefined : truncate(typeof value === "string" ? value : JSON.stringify(value), lim.maxOutputChars);
     return {
       ...(output === undefined ? {} : { output }),
@@ -133,10 +138,14 @@ export async function runScript(code: string, call: ScriptToolCaller, limits: Pa
     // Let tool calls still in flight settle before the VM goes away.
     await Promise.race([Promise.allSettled([...pending]), new Promise((r) => setTimeout(r, 100))]);
     try {
+      // The runtime asserts that nothing is still alive when it is freed, so release every handle first.
+      settledHandle?.dispose();
+      if (promiseHandle?.alive) promiseHandle.dispose();
+      for (const d of deferreds) if (d.alive) d.dispose();
       vm.dispose();
       runtime.dispose();
     } catch {
-      // Handles still held by an abandoned promise; the VM is garbage-collected with the process.
+      // A handle was still held by something abandoned mid-flight; the VM is garbage-collected with the process.
     }
   }
 }

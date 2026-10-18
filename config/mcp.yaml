@@ -9,6 +9,12 @@
 # `core: false` keeps a server's tools out of the voice model's prompt (saving tokens on every turn); it loads them
 # with find_tools when needed, and quick_agent / run_script always have them. Use it for the long tail.
 #
+# `trusted: true` skips the "Takes action: confirm first" label for a server whose tools aren't marked read-only but are
+# harmless to call without asking (play/pause). Scripts may then call them too.
+#
+# `writes: [tool, ...]` is for servers that don't mark tools read-only: exactly those tools take action (confirm first),
+# every other offered tool counts as read-only.
+#
 # Per server: either `command` (+ `args`, `env`, `cwd`) for a local server on stdio, or `url`
 # (+ `headers`) for a remote one over streamable HTTP. `${VAR}` is replaced from .env, so keys
 # stay out of this file. `enabled: false` skips a server. The bot's own .env is NOT passed to
@@ -44,6 +50,65 @@ servers:
       - search_drive_files
       - get_drive_file_content
       - get_doc_content
+
+  # GitHub (official remote server). Needs GITHUB_TOKEN in .env: a fine-grained or classic token, or the one the gh CLI
+  # already has (put the output of `gh auth token` there). X-MCP-Readonly makes the server offer read-only tools only.
+  github:
+    core: false
+    url: https://api.githubcopilot.com/mcp/
+    headers:
+      Authorization: Bearer ${GITHUB_TOKEN}
+      X-MCP-Readonly: "true"
+    tools:
+      - get_me
+      - search_repositories
+      - search_code
+      - search_issues
+      - search_pull_requests
+      - list_issues
+      - issue_read
+      - list_pull_requests
+      - pull_request_read
+      - list_commits
+      - get_commit
+      - get_file_contents
+      - list_branches
+      - list_releases
+      - get_latest_release
+
+  # Spotify (@striderlabs/mcp-spotify). Create an app at https://developer.spotify.com/dashboard with the redirect URI
+  # http://localhost:8888/callback and put its client ID in .env as SPOTIFY_CLIENT_ID. Then say "log in to Spotify" once:
+  # it opens a browser consent page and caches the token in ~/.strider/spotify. Playback needs Premium and a Spotify
+  # app open somewhere. Separate from the local songs in music/ (play_music).
+  spotify:
+    core: false
+    trusted: true
+    command: npx
+    args: [-y, "@striderlabs/mcp-spotify@0.1.0"]
+    env:
+      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID}
+    tools: [status, login, get_playback, play, pause, skip_next, skip_previous, set_volume, search, get_playlists, play_playlist, add_to_queue]
+
+  # Obsidian vault (@bitbonsai/mcpvault, works on the folder directly; no plugin or running Obsidian). This is the
+  # PotatoVault on Google Drive for desktop. write_note and patch_note change notes, so the model asks first; delete and
+  # move are not offered.
+  obsidian:
+    core: false
+    command: npx
+    args: [-y, "@bitbonsai/mcpvault@0.16.0", "G:/My Drive/PotatoVault"]
+    writes: [write_note, patch_note]
+    tools:
+      - search_notes
+      - read_note
+      - read_multiple_notes
+      - list_directory
+      - get_note_outline
+      - read_note_lines
+      - list_all_tags
+      - get_vault_stats
+      - wiki_link
+      - write_note
+      - patch_note
 
   # Time zones and conversions (needs uv).
   # time:

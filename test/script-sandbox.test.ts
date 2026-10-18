@@ -105,7 +105,7 @@ describe("find_tools", () => {
     server.registerTool("search_mail", { description: "Search the user's email", inputSchema: { q: z.string() }, annotations: { readOnlyHint: true } }, async () => ({ content: [{ type: "text", text: "mail" }] }));
     const [a, b] = InMemoryTransport.createLinkedPair();
     await server.connect(b);
-    const mcp = new McpTools({ cal: { args: [], env: {}, headers: {}, tools: "*", core: false, enabled: true, command: "x" } }, () => {}, 4000, () => a);
+    const mcp = new McpTools({ cal: { args: [], env: {}, headers: {}, tools: "*", core: false, trusted: false, enabled: true, command: "x" } }, () => {}, 4000, () => a);
     await mcp.connect();
     const find = new FindTools(mcp);
     expect(mcp.definitions).toEqual([]);
@@ -118,4 +118,19 @@ describe("find_tools", () => {
     expect(await mcp.execute("cal__get_events", '{"day":"mon"}', { userTranscript: "" })).toEqual({ result: "events on mon" });
     expect((find.execute("find_tools", '{"query":"zzz"}') as { found: unknown[] }).found).toEqual([]);
   });
+});
+
+describe("unwrapResult / writes", () => {
+  it("parses MCP text results", async () => {
+    const { unwrapResult } = await import("../src/orchestrator/code-mode.js");
+    expect(unwrapResult({ result: '{"a":1}' })).toEqual({ a: 1 });
+    expect(unwrapResult({ result: "plain" })).toBe("plain");
+    expect(unwrapResult({ result: "x", other: 1 })).toEqual({ result: "x", other: 1 });
+    expect(unwrapResult({ error: "e" })).toEqual({ error: "e" });
+  });
+});
+
+it("unwrapResult parses double-encoded JSON", async () => {
+  const { unwrapResult } = await import("../src/orchestrator/code-mode.js");
+  expect(unwrapResult({ result: JSON.stringify(JSON.stringify({ items: [1] })) })).toEqual({ items: [1] });
 });

@@ -30,6 +30,16 @@ const ServerSchema = z
      * quick_agent and run_script always see them.
      */
     core: z.boolean().default(true),
+    /**
+     * true = this server's tools aren't labeled "Takes action: confirm first" even when it doesn't mark them read-only
+     * (for low-stakes controls such as playing and pausing music). Scripts can then call them too.
+     */
+    trusted: z.boolean().default(false),
+    /**
+     * For servers that don't mark tools read-only: when given, exactly these tools change things (labeled
+     * "Takes action") and every other offered tool is treated as read-only.
+     */
+    writes: z.array(z.string()).optional(),
     enabled: z.boolean().default(true),
   })
   .refine((s) => !!s.command !== !!s.url, { message: "give either command or url" });
@@ -295,7 +305,8 @@ export class McpTools implements ToolSet {
       const name = `${server.name}__${tool.name}`.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
       const { $schema: _, ...parameters } = tool.inputSchema as Record<string, unknown>;
       // Servers declare read-only tools; anything else might change things, so the model should ask first.
-      const readOnly = tool.annotations?.readOnlyHint === true;
+      const { writes } = server.config;
+      const readOnly = server.config.trusted || (writes ? !writes.includes(tool.name) : tool.annotations?.readOnlyHint === true);
       const description = `${readOnly ? "" : "(Takes action: confirm with the user first.) "}${tool.description ?? tool.title ?? tool.name}`.trim();
       this.routes.set(name, {
         server,

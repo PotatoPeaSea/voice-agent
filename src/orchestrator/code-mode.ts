@@ -16,7 +16,7 @@ export const RUN_SCRIPT_TOOL: ChatCompletionTool = {
         code: {
           type: "string",
           description:
-            "The body of an async function. Call tools as `await tools.<tool_name>({...args})` (each returns the tool's result object and throws if it fails); " +
+            "The body of an async function. Call tools as `await tools.<tool_name>({...args})` (each returns the tool's result, already parsed from JSON when it was JSON text, and throws if it fails); " +
             "use Promise.all for independent calls. `return` the small value you want back (an object or string), and keep bulky results out of it. " +
             "No filesystem, network or imports: only the tools.",
         },
@@ -25,6 +25,31 @@ export const RUN_SCRIPT_TOOL: ChatCompletionTool = {
     },
   },
 };
+
+/**
+ * MCP tools answer {result: "<text>"}, and the text is usually itself JSON. Scripts get the parsed value
+ * (or the plain text), so they don't have to unwrap and parse it themselves.
+ */
+export function unwrapResult(value: unknown): unknown {
+  if (!value || typeof value !== "object") return value;
+  const keys = Object.keys(value);
+  const text = (value as { result?: unknown }).result;
+  if (keys.length !== 1 || keys[0] !== "result" || typeof text !== "string") return value;
+  return parseNested(text);
+}
+
+/** Parse JSON text, and again while the outcome is a string holding more JSON (GitHub's server double-encodes). */
+function parseNested(text: string): unknown {
+  let current: unknown = text;
+  for (let i = 0; i < 3 && typeof current === "string" && /^\s*[\[{"]/.test(current); i++) {
+    try {
+      current = JSON.parse(current);
+    } catch {
+      break;
+    }
+  }
+  return current;
+}
 
 /** Tools that take action are described to the model that way; scripts only get the read-only ones. */
 function isReadOnly(tool: ChatCompletionTool): boolean {
@@ -84,7 +109,7 @@ export class CodeModeTools implements ToolSet {
       code,
       async (name, callArgs) => {
         if (!allowed.has(name)) return { error: `no tool named ${name}; available: ${[...allowed].join(", ")}` };
-        return this.inner.execute(name, JSON.stringify(callArgs), ctx);
+        return unwrapResult(await this.inner.execute(name, JSON.stringify(callArgs), ctx));
       },
       this.limits,
       ctx.signal,
